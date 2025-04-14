@@ -1,0 +1,26 @@
+{
+  "name": "loop-tickets-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.7",
+    "cheerio": "^1.0.0-rc.12",
+    "node-telegram-bot-api": "^0.65.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240222.0",
+    "@types/node": "^20.11.24",
+    "@types/node-telegram-bot-api": "^0.64.8",
+    "@typescript-eslint/eslint-plugin": "^7.1.0",
+    "@typescript-eslint/parser": "^7.1.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.30.1"
+  }
+}
