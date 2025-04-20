@@ -5,6 +5,9 @@ export interface Show {
   title: string;
   url: string;
   dates: string[];
+  imageUrl: string;
+  ticketUrl: string;
+  soldOut: boolean;
 }
 
 export interface UserSubscription {

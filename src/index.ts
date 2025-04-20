@@ -1,13 +1,13 @@
 import { handleStart, handleSubscribe, notifySubscribers } from './bot';
 import { scrapeShows } from './scraper';
 import { supabase } from './db';
-import type { Env, TelegramUpdate } from './types';
+import type { TelegramUpdate } from './types';
 
-const checkInterval = Number.parseInt(process.env.CHECK_INTERVAL || '3600', 10);
+// const checkInterval = Number.parseInt(process.env.CHECK_INTERVAL || '3600', 10);
 const subscribeRegex = /\/subscribe (\d+)/;
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request) {
     const url = new URL(request.url);
     
     if (url.pathname === '/webhook') {
@@ -27,7 +27,7 @@ export default {
     return new Response('Not found', { status: 404 });
   },
   
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+  async scheduled() {
     const shows = await scrapeShows();
     const { data: existingShows } = await supabase.from('shows').select();
     

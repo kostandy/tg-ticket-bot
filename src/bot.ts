@@ -11,17 +11,31 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
+const formatShow = (show: Show): string => {
+  const dates = show.dates.map((date) => `🗓 ${date}`).join('\n');
+  const soldOutText = show.soldOut ? '\n🔴 КВИТКИ ПРОДАНО' : '\n🟢 Квитки в продажу';
+  const ticketLink = show.ticketUrl ? `\n🎫 [Купити квитки](${show.ticketUrl})` : '';
+  return `[${show.title}](${show.url})\n${dates}${soldOutText}${ticketLink}`;
+};
+
 export const handleStart = async (msg: TelegramBot.Message) => {
   const chatId = msg.chat.id;
   const shows = await scrapeShows();
   
-  const message = `Available shows:
-
-${shows.map((show, index) => `${index + 1}. ${show.title}`).join('\n')}
-
-Use /subscribe <number> to track a show`;
-    
-  await bot.sendMessage(chatId, message);
+  for (const show of shows) {
+    if (show.imageUrl) {
+      await bot.sendPhoto(chatId, show.imageUrl, {
+        caption: formatShow(show),
+        parse_mode: 'Markdown'
+      });
+    } else {
+      await bot.sendMessage(chatId, formatShow(show), {
+        parse_mode: 'Markdown'
+      });
+    }
+  }
+  
+  await bot.sendMessage(chatId, 'Use /subscribe <number> to track a show');
 };
 
 export const handleSubscribe = async (msg: TelegramBot.Message, match: RegExpExecArray | null) => {
@@ -44,7 +58,17 @@ export const handleSubscribe = async (msg: TelegramBot.Message, match: RegExpExe
   };
   
   await supabase.from('subscriptions').insert(subscription);
-  await bot.sendMessage(chatId, `You are now tracking: ${show.title}`);
+  
+  if (show.imageUrl) {
+    await bot.sendPhoto(chatId, show.imageUrl, {
+      caption: `You are now tracking:\n${formatShow(show)}`,
+      parse_mode: 'Markdown'
+    });
+  } else {
+    await bot.sendMessage(chatId, `You are now tracking:\n${formatShow(show)}`, {
+      parse_mode: 'Markdown'
+    });
+  }
 };
 
 export const notifySubscribers = async (show: Show) => {
@@ -55,9 +79,16 @@ export const notifySubscribers = async (show: Show) => {
     
   if (!subscriptions) return;
   
-  const message = `New dates available for ${show.title}!\n${show.url}`;
-  
   for (const sub of subscriptions) {
-    await bot.sendMessage(sub.chatId, message);
+    if (show.imageUrl) {
+      await bot.sendPhoto(sub.chatId, show.imageUrl, {
+        caption: `New dates available for:\n${formatShow(show)}`,
+        parse_mode: 'Markdown'
+      });
+    } else {
+      await bot.sendMessage(sub.chatId, `New dates available for:\n${formatShow(show)}`, {
+        parse_mode: 'Markdown'
+      });
+    }
   }
 }; 
