@@ -1,0 +1,15 @@
+{
+  "name": "loop-tickets-bot",
+  "main": "dist/index.js",
+  "compatibility_date": "2025-04-20",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "CHECK_INTERVAL": "3600",
+    "TARGET_WEBSITE": "https://molodyytheatre.com/afisha"
+  }
+} 
