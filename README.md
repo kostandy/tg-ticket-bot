@@ -6,17 +6,18 @@ A Telegram bot that tracks ticket availability for shows and notifies users when
 
 1. Clone the repository
 2. Install dependencies:
+
 ```bash
 npm install
 ```
+
 3. Copy `.env.example` to `.env` and fill in the values:
    - `TELEGRAM_BOT_TOKEN`: Your Telegram bot token from [@BotFather](https://t.me/botfather)
    - `SUPABASE_URL`: Your Supabase project URL
    - `SUPABASE_KEY`: Your Supabase project API key
-   - `TARGET_WEBSITE`: The website to scrape for shows
-   - `CHECK_INTERVAL`: Interval in seconds between checks (default: 3600)
 
 4. Create tables in Supabase:
+
 ```sql
 create table shows (
   id text primary key,
@@ -39,24 +40,37 @@ create table subscriptions (
 npm run dev
 ```
 
+This will start the bot in development mode with hot reloading.
+
 ## Deployment
 
-1. Install Wrangler CLI:
+1. Install dependencies if you haven't already:
+
 ```bash
-npm install -g wrangler
+npm install
 ```
 
 2. Login to Cloudflare:
+
 ```bash
-wrangler login
+npx wrangler login
 ```
 
-3. Deploy:
+3. Build and deploy:
+
 ```bash
 npm run deploy
 ```
 
 4. Set up your bot's webhook URL:
+
+```bash
+curl https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>/webhook
 ```
-https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>/webhook
-``` 
+
+## Environment Variables
+
+The following environment variables are configured in Cloudflare Workers:
+
+- `CHECK_INTERVAL`: Interval in seconds between checks (default: 3600)
+- `TARGET_WEBSITE`: The website to scrape for shows (default: https://molodyytheatre.com/afisha)
