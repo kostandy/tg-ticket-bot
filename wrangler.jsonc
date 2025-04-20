@@ -1,5 +1,5 @@
 {
-  "name": "tg-tickets-bot",
+  "name": "tg-ticket-bot",
   "main": "dist/index.js",
   "compatibility_date": "2025-04-20",
   "compatibility_flags": [
