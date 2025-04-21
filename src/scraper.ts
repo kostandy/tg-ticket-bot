@@ -1,7 +1,10 @@
 import * as cheerio from 'cheerio';
 import type { Show } from './types';
+import { getSupabase } from './db';
 
 const targetWebsite = process.env.TARGET_WEBSITE;
+const MAX_RETRIES = 3;
+const RATE_LIMIT_DELAY = 2000;
 
 if (!targetWebsite) {
   throw new Error('Missing TARGET_WEBSITE environment variable');
@@ -13,6 +16,12 @@ interface DrupalAjaxCommand {
   selector: string;
   data: string;
   settings: null;
+}
+
+interface FetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
 }
 
 const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
@@ -46,6 +55,24 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
   });
   
   return shows;
+};
+
+const fetchWithRetry = async (url: string, options?: FetchOptions): Promise<Response> => {
+  let lastError;
+  
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      return response;
+    } catch (error) {
+      console.error(`Attempt ${i + 1} failed:`, error);
+      lastError = error;
+      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
+    }
+  }
+  
+  throw lastError;
 };
 
 const fetchPage = async (url: string, page: number): Promise<Show[]> => {
@@ -95,21 +122,57 @@ const scrapeMonth = async (url: string): Promise<Show[]> => {
   const shows: Show[] = [];
   let page = 0;
 
-  while (true) {
-    console.log(`Fetching page ${page}...`);
-    const monthShows = await fetchPage(url, page);
-    
-    if (!monthShows.length) {
-      break;
+  try {
+    while (true) {
+      console.log(`Fetching page ${page}...`);
+      const monthShows = await fetchPage(url, page);
+      
+      if (!monthShows.length) {
+        break;
+      }
+      
+      shows.push(...monthShows);
+      page++;
+      
+      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
     }
-    
-    shows.push(...monthShows);
-    page++;
-    
-    await new Promise(resolve => setTimeout(resolve, 1000));
+  } catch (error) {
+    console.error(`Error scraping month ${url}:`, error);
   }
 
   return shows;
+};
+
+const saveShowsToDb = async (shows: Show[]): Promise<void> => {
+  const supabase = getSupabase();
+  const { data: existingShows, error: selectError } = await supabase.from('shows').select();
+  
+  if (selectError) {
+    console.error('Failed to fetch existing shows:', selectError);
+    return;
+  }
+
+  for (const show of shows) {
+    const existingShow = existingShows?.find((s) => s.title === show.title);
+    
+    try {
+      if (!existingShow) {
+        const { error: insertError } = await supabase.from('shows').insert(show);
+        if (insertError) throw insertError;
+        console.log('Inserted show:', show.title);
+      } else if (JSON.stringify(existingShow.dates) !== JSON.stringify(show.dates)) {
+        const { error: updateError } = await supabase
+          .from('shows')
+          .update({ dates: show.dates })
+          .eq('id', show.id);
+        if (updateError) throw updateError;
+        console.log('Updated show:', show.title);
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error) {
+      console.error(`Error saving show ${show.title}:`, error);
+    }
+  }
 };
 
 export const scrapeShows = async (): Promise<Show[]> => {
@@ -118,19 +181,27 @@ export const scrapeShows = async (): Promise<Show[]> => {
   let currentUrl = targetWebsite;
   
   while (currentUrl) {
-    const response = await fetch(currentUrl);
-    const html = await response.text();
-    const $ = cheerio.load(html);
+    try {
+      const response = await fetchWithRetry(currentUrl);
+      const html = await response.text();
+      const $ = cheerio.load(html);
 
-    if (hasNoEvents($)) {
+      if (hasNoEvents($)) {
+        break;
+      }
+
+      const monthShows = await scrapeMonth(currentUrl);
+      if (monthShows.length) {
+        await saveShowsToDb(monthShows);
+        allShows.push(...monthShows);
+      }
+
+      currentUrl = getNextMonthUrl($) || '';
+      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
+    } catch (error) {
+      console.error(`Error processing URL ${currentUrl}:`, error);
       break;
     }
-
-    const monthShows = await scrapeMonth(currentUrl);
-    allShows.push(...monthShows);
-
-    currentUrl = getNextMonthUrl($) || '';
-    await new Promise(resolve => setTimeout(resolve, 1000));
   }
   
   console.log(`Found ${allShows.length} shows in total`);
