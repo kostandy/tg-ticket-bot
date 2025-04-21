@@ -8,6 +8,7 @@ if (!targetWebsite) {
 }
 
 export const scrapeShows = async (): Promise<Show[]> => {
+  console.info('Scraping shows from', targetWebsite);
   const response = await fetch(targetWebsite);
   const html = await response.text();
   const $ = cheerio.load(html);
