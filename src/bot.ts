@@ -1,25 +1,34 @@
-import { supabase } from './db';
-import { scrapeShows } from './scraper';
-import type { Show, UserSubscription, TelegramMessage } from './types';
+import { getSupabase } from './db';
+import type { Show, TelegramMessage } from './types';
 
-const token = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
-if (!token) {
-  throw new Error('Missing TELEGRAM_BOT_TOKEN environment variable');
+if (!TELEGRAM_BOT_TOKEN) {
+  throw new Error('Missing Telegram bot token');
 }
 
-const API_URL = `https://api.telegram.org/bot${token}`;
-
-const sendMessage = async (chatId: number, text: string, parseMode = 'Markdown') => {
-  await fetch(`${API_URL}/sendMessage`, {
+const sendMessage = async (chatId: number, text: string) => {
+  const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode })
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+    }),
   });
+
+  if (!response.ok) {
+    const error = await response.text();
+    console.error('Failed to send message:', error);
+    throw new Error(`Failed to send message: ${error}`);
+  }
 };
 
 const sendPhoto = async (chatId: number, photo: string, caption?: string, parseMode = 'Markdown') => {
-  await fetch(`${API_URL}/sendPhoto`, {
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, photo, caption, parse_mode: parseMode })
@@ -33,64 +42,86 @@ const formatShow = (show: Show): string => {
   return `[${show.title}](${show.url})\n${dates}${soldOutText}${ticketLink}`;
 };
 
+
 export const handleStart = async (msg: TelegramMessage) => {
-  const chatId = msg.chat.id;
-  const shows = await scrapeShows();
-  
-  for (const show of shows) {
-    if (show.imageUrl) {
-      await sendPhoto(chatId, show.imageUrl, formatShow(show));
-    } else {
-      await sendMessage(chatId, formatShow(show));
-    }
-  }
-  
-  await sendMessage(chatId, 'Use /subscribe <number> to track a show');
+  await sendMessage(
+    msg.chat.id,
+    'Привіт! Я допоможу тобі слідкувати за квитками в Молодий театр.\n\nЩоб підписатися на сповіщення про нові квитки, використовуй команду /subscribe',
+  );
 };
 
 export const handleSubscribe = async (msg: TelegramMessage, match: RegExpExecArray | null) => {
-  if (!match) return;
-  
-  const chatId = msg.chat.id;
-  const shows = await scrapeShows();
-  const showIndex = Number.parseInt(match[1], 10) - 1;
-  
-  if (showIndex < 0 || showIndex >= shows.length) {
-    await sendMessage(chatId, 'Invalid show number');
+  if (!match) {
+    await sendMessage(msg.chat.id, 'Будь ласка, вкажи ID вистави');
     return;
   }
-  
-  const show = shows[showIndex];
-  const subscription: Omit<UserSubscription, 'id'> = {
-    userId: msg.from?.id || 0,
-    showId: show.id,
-    chatId
-  };
-  
-  await supabase.from('subscriptions').insert(subscription);
 
-  if (show.imageUrl) {
-    await sendPhoto(chatId, show.imageUrl, `You are now tracking:\n${formatShow(show)}`);
-  } else {
-    await sendMessage(chatId, `You are now tracking:\n${formatShow(show)}`);
+  const showId = parseInt(match[1], 10);
+  console.log('Subscribing to show:', { chatId: msg.chat.id, showId });
+
+  const subscription = {
+    chat_id: msg.chat.id,
+    show_id: showId,
+  };
+
+  const supabase = getSupabase();
+  const { error: insertError } = await supabase.from('subscriptions').insert(subscription);
+  if (insertError) {
+    console.error('Failed to save subscription:', {
+      error: insertError,
+      code: insertError.code,
+      message: insertError.message,
+      details: insertError.details,
+      hint: insertError.hint,
+      subscription
+    });
+    await sendMessage(msg.chat.id, 'Не вдалося підписатися на сповіщення');
+    return;
   }
+
+  console.log('Successfully subscribed:', subscription);
+  await sendMessage(msg.chat.id, 'Ти підписався на сповіщення про нові квитки');
 };
 
 export const notifySubscribers = async (show: Show) => {
-  console.log('Notifying subscribers for', show);
+  console.log('Notifying subscribers for show:', JSON.stringify(show, null, 2));
 
-  const { data: subscriptions } = await supabase
+  const supabase = getSupabase();
+  const { data: subscriptions, error: selectError } = await supabase
     .from('subscriptions')
     .select()
-    .eq('showId', show.id);
-    
-  if (!subscriptions) return;
-  
-  for (const sub of subscriptions) {
-    if (show.imageUrl) {
-      await sendPhoto(sub.chatId, show.imageUrl, `New dates available for:\n${formatShow(show)}`);
-    } else {
-      await sendMessage(sub.chatId, `New dates available for:\n${formatShow(show)}`);
+    .eq('show_id', show.id);
+
+  if (selectError) {
+    console.error('Failed to fetch subscriptions:', {
+      error: selectError,
+      code: selectError.code,
+      message: selectError.message,
+      details: selectError.details,
+      hint: selectError.hint,
+      showId: show.id
+    });
+    return;
+  }
+
+  console.log('Found subscriptions:', subscriptions);
+
+  if (!subscriptions?.length) {
+    console.log('No subscribers found for show:', show.id);
+    return;
+  }
+
+  const message = formatShow(show);
+  for (const subscription of subscriptions) {
+    try {
+      await sendMessage(subscription.chat_id, message);
+      console.log('Notification sent:', { chatId: subscription.chat_id, showId: show.id });
+    } catch (error) {
+      console.error('Failed to send notification:', {
+        error,
+        chatId: subscription.chat_id,
+        showId: show.id
+      });
     }
   }
 }; 

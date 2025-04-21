@@ -1,6 +1,6 @@
 import { handleStart, handleSubscribe } from './bot';
 import { scrapeShows } from './scraper';
-import { supabase } from './db';
+import { initSupabase, getSupabase } from './db';
 import type { Env, TelegramUpdate } from './types';
 
 const subscribeRegex = /\/subscribe (\d+)/;
@@ -12,6 +12,8 @@ export default {
     // Verify secret token (optional but recommended)
     const secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
     if (secret !== env.TELEGRAM_BOT_SECRET) return new Response('Unauthorized', { status: 403 });
+
+    initSupabase(env);
 
     const url = new URL(request.url);
 
@@ -32,11 +34,16 @@ export default {
     return new Response('Not found', { status: 404 });
   },
 
-  async scheduled() {
+  async scheduled(env: Env) {
+    initSupabase(env);
     console.log('Starting scheduled job');
+    console.log('Supabase URL:', env.SUPABASE_URL);
+    console.log('Supabase key length:', env.SUPABASE_KEY?.length);
+
     const shows = await scrapeShows();
     console.log('Scraped shows:', JSON.stringify(shows, null, 2));
 
+    const supabase = getSupabase();
     const { data: existingShows, error: selectError } = await supabase.from('shows').select();
     if (selectError) {
       console.error('Failed to fetch existing shows:', selectError);
