@@ -77,6 +77,8 @@ export const handleSubscribe = async (msg: TelegramMessage, match: RegExpExecArr
 };
 
 export const notifySubscribers = async (show: Show) => {
+  console.log('Notifying subscribers for', show);
+
   const { data: subscriptions } = await supabase
     .from('subscriptions')
     .select()

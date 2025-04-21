@@ -37,7 +37,7 @@ export const scrapeShows = async (): Promise<Show[]> => {
     const $el = $(element);
     const title = $el.find('.views-field-field-event-title .field-content a').text().trim();
     const url = $el.find('.views-field-field-event-title .field-content a').attr('href') || '';
-    const dates = $el.find('.views-field-field-time .field-content span').map((_, date) => $(date).text().trim()).get();
+    const dates = $el.find('.views-field-field-time .field-content').map((_, date) => $(date).text().trim()).get();
     const imageUrl = $el.find('.views-field-field-images img').attr('src') || '';
     const ticketUrl = $el.find('.views-field-nothing a').attr('href') || '';
     const soldOut = $el.find('.views-field-field-label .field-content').text().trim().toLowerCase() === 'квитки продано';
