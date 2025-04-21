@@ -1,8 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-type RequestInit = Parameters<typeof fetch>[1];
-
 let supabase: ReturnType<typeof createClient<Database>>;
 
 export function initSupabase(env: { SUPABASE_URL: string; SUPABASE_KEY: string }) {
@@ -20,9 +18,14 @@ export function initSupabase(env: { SUPABASE_URL: string; SUPABASE_KEY: string }
     },
     global: {
       headers: { 'x-client-info': 'loop-tickets-bot' },
-      fetch: (url, init?: RequestInit) => {
-        if (init) delete init.keepalive;
-        return fetch(url, init);
+      fetch: (url, init) => {
+        const modifiedInit = {
+          ...init,
+          cache: 'no-store',
+          credentials: 'omit' as const
+        };
+        delete modifiedInit.keepalive;
+        return fetch(url, modifiedInit);
       }
     },
     db: {
