@@ -13,9 +13,13 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setMyCommands" \
      -H "Content-Type: application/json" \
      -d '{
        "commands": [
+          {
+           "command": "posters",
+           "description": "Показати всі збережені вистави"
+         },
          {
-           "command": "start",
-           "description": "Показати всі вистави"
+           "command": "upcoming",
+           "description": "Показати вистави з доступними квитками"
          },
          {
            "command": "subscribe",
@@ -24,14 +28,6 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setMyCommands" \
          {
            "command": "unsubscribe",
            "description": "Відписатися від сповіщень про квитки. Використання: /unsubscribe <ID вистави>"
-         },
-         {
-           "command": "posters",
-           "description": "Показати всі збережені вистави"
-         },
-         {
-           "command": "upcoming",
-           "description": "Показати вистави з доступними квитками"
          }
        ]
      }' 

@@ -22,6 +22,10 @@ export default {
       const update = await request.json() as TelegramUpdate;
       const msg = update.message;
 
+      if (!msg) {
+        return new Response('Invalid message', { status: 400 });
+      }
+
       if (msg.text === '/start') {
         await handleStart(msg);
       } else if (msg.text?.startsWith('/subscribe')) {
