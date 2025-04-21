@@ -9,4 +9,6 @@ if (!supabaseUrl || !supabaseKey) {
   throw new Error('Missing Supabase credentials');
 }
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseKey); 
+console.log('Initializing Supabase client with URL:', supabaseUrl);
+export const supabase = createClient<Database>(supabaseUrl, supabaseKey);
+console.log('Supabase client initialized'); 

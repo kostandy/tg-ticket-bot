@@ -33,25 +33,54 @@ export default {
   },
 
   async scheduled() {
-    console.log('cron processed');
+    console.log('Starting scheduled job');
     const shows = await scrapeShows();
-    const { data: existingShows } = await supabase.from('shows').select();
+    console.log('Scraped shows:', JSON.stringify(shows, null, 2));
 
-    if (!existingShows) return;
+    const { data: existingShows, error: selectError } = await supabase.from('shows').select();
+    if (selectError) {
+      console.error('Failed to fetch existing shows:', selectError);
+      return;
+    }
+    console.log('Existing shows:', JSON.stringify(existingShows, null, 2));
 
     for (const show of shows) {
-      const existing = existingShows.find(s => s.id === show.id);
-
-      if (!existing) {
-        await supabase.from('shows').insert(show);
-        continue;
-      }
-
-      const newDates = show.dates.filter(d => !existing.dates.includes(d));
-
-      if (newDates.length > 0) {
-        await supabase.from('shows').update({ dates: show.dates }).eq('id', show.id);
-        await notifySubscribers(show);
+      const existingShow = existingShows?.find((s) => s.title === show.title);
+      if (!existingShow) {
+        console.log('Inserting new show:', JSON.stringify(show, null, 2));
+        const { error: insertError, data: insertData } = await supabase.from('shows').insert(show);
+        if (insertError) {
+          console.error('Failed to insert show:', insertError);
+          console.error('Insert error details:', {
+            code: insertError.code,
+            message: insertError.message,
+            details: insertError.details,
+            hint: insertError.hint
+          });
+        } else {
+          console.log('Successfully inserted show:', insertData);
+        }
+      } else if (JSON.stringify(existingShow.dates) !== JSON.stringify(show.dates)) {
+        console.log('Updating show dates:', {
+          showId: existingShow.id,
+          oldDates: existingShow.dates,
+          newDates: show.dates
+        });
+        const { error: updateError, data: updateData } = await supabase
+          .from('shows')
+          .update({ dates: show.dates })
+          .eq('id', show.id);
+        if (updateError) {
+          console.error('Failed to update show:', updateError);
+          console.error('Update error details:', {
+            code: updateError.code,
+            message: updateError.message,
+            details: updateError.details,
+            hint: updateError.hint
+          });
+        } else {
+          console.log('Successfully updated show:', updateData);
+        }
       }
     }
   }
