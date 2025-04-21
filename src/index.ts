@@ -3,7 +3,6 @@ import { scrapeShows } from './scraper';
 import { supabase } from './db';
 import type { Env, TelegramUpdate } from './types';
 
-// const checkInterval = Number.parseInt(process.env.CHECK_INTERVAL || '3600', 10);
 const subscribeRegex = /\/subscribe (\d+)/;
 
 export default {

@@ -72,5 +72,4 @@ curl https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_UR
 
 The following environment variables are configured in Cloudflare Workers:
 
-- `CHECK_INTERVAL`: Interval in seconds between checks (default: 3600)
 - `TARGET_WEBSITE`: The website to scrape for shows (default: https://molodyytheatre.com/afisha)

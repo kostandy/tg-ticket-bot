@@ -38,7 +38,6 @@ export interface Env {
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
   TARGET_WEBSITE: string;
-  CHECK_INTERVAL: string;
 }
 
 export interface TelegramUpdate {
