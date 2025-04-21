@@ -27,14 +27,6 @@ const sendMessage = async (chatId: number, text: string) => {
   }
 };
 
-const sendPhoto = async (chatId: number, photo: string, caption?: string, parseMode = 'Markdown') => {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, photo, caption, parse_mode: parseMode })
-  });
-};
-
 const formatShow = (show: Show): string => {
   const dates = show.dates.map((date) => `🗓 ${date}`).join('\n');
   const soldOutText = show.soldOut ? '\n🔴 КВИТКИ ПРОДАНО' : '\n🟢 Квитки в продажу';
