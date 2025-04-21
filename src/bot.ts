@@ -1,7 +1,6 @@
-import TelegramBot from 'node-telegram-bot-api';
 import { supabase } from './db';
 import { scrapeShows } from './scraper';
-import type { Show, UserSubscription } from './types';
+import type { Show, UserSubscription, TelegramMessage } from './types';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -9,7 +8,23 @@ if (!token) {
   throw new Error('Missing TELEGRAM_BOT_TOKEN environment variable');
 }
 
-const bot = new TelegramBot(token, { polling: true });
+const API_URL = `https://api.telegram.org/bot${token}`;
+
+const sendMessage = async (chatId: number, text: string, parseMode = 'Markdown') => {
+  await fetch(`${API_URL}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode })
+  });
+};
+
+const sendPhoto = async (chatId: number, photo: string, caption?: string, parseMode = 'Markdown') => {
+  await fetch(`${API_URL}/sendPhoto`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, photo, caption, parse_mode: parseMode })
+  });
+};
 
 const formatShow = (show: Show): string => {
   const dates = show.dates.map((date) => `🗓 ${date}`).join('\n');
@@ -18,27 +33,22 @@ const formatShow = (show: Show): string => {
   return `[${show.title}](${show.url})\n${dates}${soldOutText}${ticketLink}`;
 };
 
-export const handleStart = async (msg: TelegramBot.Message) => {
+export const handleStart = async (msg: TelegramMessage) => {
   const chatId = msg.chat.id;
   const shows = await scrapeShows();
   
   for (const show of shows) {
     if (show.imageUrl) {
-      await bot.sendPhoto(chatId, show.imageUrl, {
-        caption: formatShow(show),
-        parse_mode: 'Markdown'
-      });
+      await sendPhoto(chatId, show.imageUrl, formatShow(show));
     } else {
-      await bot.sendMessage(chatId, formatShow(show), {
-        parse_mode: 'Markdown'
-      });
+      await sendMessage(chatId, formatShow(show));
     }
   }
   
-  await bot.sendMessage(chatId, 'Use /subscribe <number> to track a show');
+  await sendMessage(chatId, 'Use /subscribe <number> to track a show');
 };
 
-export const handleSubscribe = async (msg: TelegramBot.Message, match: RegExpExecArray | null) => {
+export const handleSubscribe = async (msg: TelegramMessage, match: RegExpExecArray | null) => {
   if (!match) return;
   
   const chatId = msg.chat.id;
@@ -46,7 +56,7 @@ export const handleSubscribe = async (msg: TelegramBot.Message, match: RegExpExe
   const showIndex = Number.parseInt(match[1], 10) - 1;
   
   if (showIndex < 0 || showIndex >= shows.length) {
-    await bot.sendMessage(chatId, 'Invalid show number');
+    await sendMessage(chatId, 'Invalid show number');
     return;
   }
   
@@ -58,16 +68,11 @@ export const handleSubscribe = async (msg: TelegramBot.Message, match: RegExpExe
   };
   
   await supabase.from('subscriptions').insert(subscription);
-  
+
   if (show.imageUrl) {
-    await bot.sendPhoto(chatId, show.imageUrl, {
-      caption: `You are now tracking:\n${formatShow(show)}`,
-      parse_mode: 'Markdown'
-    });
+    await sendPhoto(chatId, show.imageUrl, `You are now tracking:\n${formatShow(show)}`);
   } else {
-    await bot.sendMessage(chatId, `You are now tracking:\n${formatShow(show)}`, {
-      parse_mode: 'Markdown'
-    });
+    await sendMessage(chatId, `You are now tracking:\n${formatShow(show)}`);
   }
 };
 
@@ -81,14 +86,9 @@ export const notifySubscribers = async (show: Show) => {
   
   for (const sub of subscriptions) {
     if (show.imageUrl) {
-      await bot.sendPhoto(sub.chatId, show.imageUrl, {
-        caption: `New dates available for:\n${formatShow(show)}`,
-        parse_mode: 'Markdown'
-      });
+      await sendPhoto(sub.chatId, show.imageUrl, `New dates available for:\n${formatShow(show)}`);
     } else {
-      await bot.sendMessage(sub.chatId, `New dates available for:\n${formatShow(show)}`, {
-        parse_mode: 'Markdown'
-      });
+      await sendMessage(sub.chatId, `New dates available for:\n${formatShow(show)}`);
     }
   }
 }; 
