@@ -8,8 +8,13 @@ export function initSupabase(env: { SUPABASE_URL: string; SUPABASE_KEY: string }
     throw new Error('Missing Supabase credentials');
   }
 
-  console.log('Initializing Supabase client with URL:', env.SUPABASE_URL);
-  supabase = createClient<Database>(env.SUPABASE_URL, env.SUPABASE_KEY);
+  const url = env.SUPABASE_URL.replace(/\/$/, '');
+  console.log('Initializing Supabase client with URL:', url);
+  supabase = createClient<Database>(url, env.SUPABASE_KEY, {
+    auth: {
+      persistSession: false
+    }
+  });
   console.log('Supabase client initialized');
   return supabase;
 }
