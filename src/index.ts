@@ -34,11 +34,13 @@ export default {
     return new Response('Not found', { status: 404 });
   },
 
-  async scheduled(env: Env) {
-    initSupabase(env);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async scheduled(_: any, env: Env) {
     console.log('Starting scheduled job');
     console.log('Supabase URL:', env.SUPABASE_URL);
     console.log('Supabase key length:', env.SUPABASE_KEY?.length);
+    console.log('Env:', env);
+    initSupabase(env);
 
     const shows = await scrapeShows();
     console.log('Scraped shows:', JSON.stringify(shows, null, 2));
