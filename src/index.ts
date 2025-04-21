@@ -1,4 +1,4 @@
-import { handleStart, handleSubscribe } from './bot';
+import { handleStart, handleSubscribe, handlePosters } from './bot';
 import { scrapeShows } from './scraper';
 import { initSupabase, getSupabase } from './db';
 import type { Env, TelegramUpdate } from './types';
@@ -26,6 +26,8 @@ export default {
       } else if (msg.text?.startsWith('/subscribe')) {
         const match = subscribeRegex.exec(msg.text);
         await handleSubscribe(msg, match);
+      } else if (msg.text === '/posters') {
+        await handlePosters(msg);
       }
 
       return new Response('OK');

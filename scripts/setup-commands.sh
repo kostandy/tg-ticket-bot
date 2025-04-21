@@ -1,7 +1,7 @@
 #!/bin/bash
 
-if [ -f "../.dev.vars" ]; then
-  export $(cat ../.dev.vars | xargs)
+if [ -f ".dev.vars" ]; then
+  export $(cat .dev.vars | xargs)
 fi
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
@@ -20,6 +20,10 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setMyCommands" \
          {
            "command": "subscribe",
            "description": "Підписатися на сповіщення про квитки. Використання: /subscribe <ID вистави>"
+         },
+         {
+           "command": "posters",
+           "description": "Показати всі збережені вистави"
          }
        ]
      }' 

@@ -116,4 +116,23 @@ export const notifySubscribers = async (show: Show) => {
       });
     }
   }
+};
+
+export const handlePosters = async (msg: TelegramMessage) => {
+  const supabase = getSupabase();
+  const { data: shows, error } = await supabase.from('shows').select();
+  
+  if (error) {
+    console.error('Failed to fetch shows:', error);
+    await sendMessage(msg.chat.id, 'Не вдалося отримати список вистав');
+    return;
+  }
+
+  if (!shows?.length) {
+    await sendMessage(msg.chat.id, 'Наразі немає доступних вистав');
+    return;
+  }
+
+  const message = shows.map(formatShow).join('\n\n');
+  await sendMessage(msg.chat.id, message);
 }; 
