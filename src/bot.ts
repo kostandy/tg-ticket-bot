@@ -7,7 +7,7 @@ if (!TELEGRAM_BOT_TOKEN) {
   throw new Error('Missing Telegram bot token');
 }
 
-const sendMessage = async (chatId: number, text: string) => {
+const sendMessage = async (chatId: number, text: string, ticketUrl?: string) => {
   const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: {
@@ -17,6 +17,13 @@ const sendMessage = async (chatId: number, text: string) => {
       chat_id: chatId,
       text,
       parse_mode: 'Markdown',
+      ...(ticketUrl && {
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🎫 Купити квитки', url: `${process.env.TARGET_WEBSITE}${ticketUrl}` }
+          ]]
+        }
+      })
     }),
   });
 
@@ -27,13 +34,14 @@ const sendMessage = async (chatId: number, text: string) => {
   }
 };
 
-const formatShow = (show: Show): string => {
+const formatShow = (show: Show): { text: string; ticketUrl?: string } => {
   const dates = show.dates.map((date) => `🗓 ${date}`).join('\n');
   const soldOutText = show.soldOut ? '\n🔴 КВИТКИ ПРОДАНО' : '\n🟢 Квитки в продажу';
-  const ticketLink = show.ticketUrl ? `\n🎫 [Купити квитки](${show.ticketUrl})` : '';
-  return `[${show.title}](${show.url})\n${dates}${soldOutText}${ticketLink}`;
+  return {
+    text: `[${show.title}](${show.url})\n${dates}${soldOutText}`,
+    ticketUrl: !show.soldOut ? show.ticketUrl : undefined
+  };
 };
-
 
 export const handleStart = async (msg: TelegramMessage) => {
   await sendMessage(
@@ -106,7 +114,7 @@ export const notifySubscribers = async (show: Show) => {
   const message = formatShow(show);
   for (const subscription of subscriptions) {
     try {
-      await sendMessage(subscription.chat_id, message);
+      await sendMessage(subscription.chat_id, message.text, message.ticketUrl);
       console.log('Notification sent:', { chatId: subscription.chat_id, showId: show.id });
     } catch (error) {
       console.error('Failed to send notification:', {
@@ -133,8 +141,10 @@ export const handlePosters = async (msg: TelegramMessage) => {
     return;
   }
 
-  const message = shows.map(formatShow).join('\n\n');
-  await sendMessage(msg.chat.id, message);
+  const messages = shows.map(formatShow);
+  for (const message of messages) {
+    await sendMessage(msg.chat.id, message.text, message.ticketUrl);
+  }
 };
 
 export const handleUnsubscribe = async (msg: TelegramMessage, match: RegExpExecArray | null) => {
@@ -179,6 +189,8 @@ export const handleUpcoming = async (msg: TelegramMessage) => {
     return;
   }
 
-  const message = shows.map(formatShow).join('\n\n');
-  await sendMessage(msg.chat.id, message);
+  const messages = shows.map(formatShow);
+  for (const message of messages) {
+    await sendMessage(msg.chat.id, message.text, message.ticketUrl);
+  }
 }; 
