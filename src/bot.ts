@@ -7,7 +7,40 @@ if (!TELEGRAM_BOT_TOKEN) {
   throw new Error('Missing Telegram bot token');
 }
 
-const sendMessage = async (chatId: number, text: string, ticketUrl?: string) => {
+interface FormattedMessage {
+  text: string;
+  ticketUrl?: string;
+  imageUrl?: string;
+}
+
+const sendMessage = async (chatId: number, message: FormattedMessage) => {
+  if (message.imageUrl) {
+    try {
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo: message.imageUrl,
+          caption: message.text,
+          parse_mode: 'Markdown',
+          ...(message.ticketUrl && {
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '🎫 Купити квитки', url: `https://molodyytheatre.com${message.ticketUrl}` }
+              ]]
+            }
+          })
+        }),
+      });
+      return;
+    } catch (error) {
+      console.error('Failed to send photo, falling back to text:', error);
+    }
+  }
+
   const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: {
@@ -15,12 +48,12 @@ const sendMessage = async (chatId: number, text: string, ticketUrl?: string) => 
     },
     body: JSON.stringify({
       chat_id: chatId,
-      text,
+      text: message.text,
       parse_mode: 'Markdown',
-      ...(ticketUrl && {
+      ...(message.ticketUrl && {
         reply_markup: {
           inline_keyboard: [[
-            { text: '🎫 Купити квитки', url: `${process.env.TARGET_WEBSITE}${ticketUrl}` }
+            { text: '🎫 Купити квитки', url: `https://molodyytheatre.com${message.ticketUrl}` }
           ]]
         }
       })
@@ -34,25 +67,26 @@ const sendMessage = async (chatId: number, text: string, ticketUrl?: string) => 
   }
 };
 
-const formatShow = (show: Show): { text: string; ticketUrl?: string } => {
+const formatShow = (show: Show): FormattedMessage => {
   const dates = show.dates.map((date) => `🗓 ${date}`).join('\n');
   const soldOutText = show.soldOut ? '\n🔴 КВИТКИ ПРОДАНО' : '\n🟢 Квитки в продажу';
   return {
     text: `[${show.title}](${show.url})\n${dates}${soldOutText}`,
-    ticketUrl: !show.soldOut ? show.ticketUrl : undefined
+    ticketUrl: !show.soldOut ? show.ticketUrl : undefined,
+    imageUrl: show.imageUrl
   };
 };
 
 export const handleStart = async (msg: TelegramMessage) => {
   await sendMessage(
     msg.chat.id,
-    'Привіт! Я допоможу тобі слідкувати за квитками в Молодий театр.\n\nЩоб підписатися на сповіщення про нові квитки, використовуй команду /subscribe',
+    { text: 'Привіт! Я допоможу тобі слідкувати за квитками в Молодий театр.\n\nЩоб підписатися на сповіщення про нові квитки, використовуй команду /subscribe' }
   );
 };
 
 export const handleSubscribe = async (msg: TelegramMessage, match: RegExpExecArray | null) => {
   if (!match) {
-    await sendMessage(msg.chat.id, 'Будь ласка, вкажи ID вистави');
+    await sendMessage(msg.chat.id, { text: 'Будь ласка, вкажи ID вистави' });
     return;
   }
 
@@ -75,12 +109,12 @@ export const handleSubscribe = async (msg: TelegramMessage, match: RegExpExecArr
       hint: insertError.hint,
       subscription
     });
-    await sendMessage(msg.chat.id, 'Не вдалося підписатися на сповіщення');
+    await sendMessage(msg.chat.id, { text: 'Не вдалося підписатися на сповіщення' });
     return;
   }
 
   console.log('Successfully subscribed:', subscription);
-  await sendMessage(msg.chat.id, 'Ти підписався на сповіщення про нові квитки');
+  await sendMessage(msg.chat.id, { text: 'Ти підписався на сповіщення про нові квитки' });
 };
 
 export const notifySubscribers = async (show: Show) => {
@@ -114,7 +148,7 @@ export const notifySubscribers = async (show: Show) => {
   const message = formatShow(show);
   for (const subscription of subscriptions) {
     try {
-      await sendMessage(subscription.chat_id, message.text, message.ticketUrl);
+      await sendMessage(subscription.chat_id, message);
       console.log('Notification sent:', { chatId: subscription.chat_id, showId: show.id });
     } catch (error) {
       console.error('Failed to send notification:', {
@@ -132,24 +166,24 @@ export const handlePosters = async (msg: TelegramMessage) => {
   
   if (error) {
     console.error('Failed to fetch shows:', error);
-    await sendMessage(msg.chat.id, 'Не вдалося отримати список вистав');
+    await sendMessage(msg.chat.id, { text: 'Не вдалося отримати список вистав' });
     return;
   }
 
   if (!shows?.length) {
-    await sendMessage(msg.chat.id, 'Наразі немає доступних вистав');
+    await sendMessage(msg.chat.id, { text: 'Наразі немає доступних вистав' });
     return;
   }
 
   const messages = shows.map(formatShow);
   for (const message of messages) {
-    await sendMessage(msg.chat.id, message.text, message.ticketUrl);
+    await sendMessage(msg.chat.id, message);
   }
 };
 
 export const handleUnsubscribe = async (msg: TelegramMessage, match: RegExpExecArray | null) => {
   if (!match) {
-    await sendMessage(msg.chat.id, 'Будь ласка, вкажи ID вистави');
+    await sendMessage(msg.chat.id, { text: 'Будь ласка, вкажи ID вистави' });
     return;
   }
 
@@ -163,11 +197,11 @@ export const handleUnsubscribe = async (msg: TelegramMessage, match: RegExpExecA
 
   if (error) {
     console.error('Failed to delete subscription:', error);
-    await sendMessage(msg.chat.id, 'Не вдалося відписатися від сповіщень');
+    await sendMessage(msg.chat.id, { text: 'Не вдалося відписатися від сповіщень' });
     return;
   }
 
-  await sendMessage(msg.chat.id, 'Відписано від сповіщень про квитки');
+  await sendMessage(msg.chat.id, { text: 'Відписано від сповіщень про квитки' });
 };
 
 export const handleUpcoming = async (msg: TelegramMessage) => {
@@ -180,17 +214,17 @@ export const handleUpcoming = async (msg: TelegramMessage) => {
   
   if (error) {
     console.error('Failed to fetch upcoming shows:', error);
-    await sendMessage(msg.chat.id, 'Не вдалося отримати список вистав');
+    await sendMessage(msg.chat.id, { text: 'Не вдалося отримати список вистав' });
     return;
   }
 
   if (!shows?.length) {
-    await sendMessage(msg.chat.id, 'Наразі немає доступних вистав');
+    await sendMessage(msg.chat.id, { text: 'Наразі немає доступних вистав' });
     return;
   }
 
   const messages = shows.map(formatShow);
   for (const message of messages) {
-    await sendMessage(msg.chat.id, message.text, message.ticketUrl);
+    await sendMessage(msg.chat.id, message);
   }
 }; 
