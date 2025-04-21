@@ -135,4 +135,50 @@ export const handlePosters = async (msg: TelegramMessage) => {
 
   const message = shows.map(formatShow).join('\n\n');
   await sendMessage(msg.chat.id, message);
+};
+
+export const handleUnsubscribe = async (msg: TelegramMessage, match: RegExpExecArray | null) => {
+  if (!match) {
+    await sendMessage(msg.chat.id, 'Будь ласка, вкажи ID вистави');
+    return;
+  }
+
+  const showId = parseInt(match[1], 10);
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from('subscriptions')
+    .delete()
+    .eq('chat_id', msg.chat.id)
+    .eq('show_id', showId);
+
+  if (error) {
+    console.error('Failed to delete subscription:', error);
+    await sendMessage(msg.chat.id, 'Не вдалося відписатися від сповіщень');
+    return;
+  }
+
+  await sendMessage(msg.chat.id, 'Відписано від сповіщень про квитки');
+};
+
+export const handleUpcoming = async (msg: TelegramMessage) => {
+  const supabase = getSupabase();
+  const { data: shows, error } = await supabase
+    .from('shows')
+    .select()
+    .eq('soldOut', false)
+    .order('dates', { ascending: true });
+  
+  if (error) {
+    console.error('Failed to fetch upcoming shows:', error);
+    await sendMessage(msg.chat.id, 'Не вдалося отримати список вистав');
+    return;
+  }
+
+  if (!shows?.length) {
+    await sendMessage(msg.chat.id, 'Наразі немає доступних вистав');
+    return;
+  }
+
+  const message = shows.map(formatShow).join('\n\n');
+  await sendMessage(msg.chat.id, message);
 }; 

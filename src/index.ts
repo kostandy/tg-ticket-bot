@@ -1,9 +1,10 @@
-import { handleStart, handleSubscribe, handlePosters } from './bot';
+import { handleStart, handleSubscribe, handlePosters, handleUnsubscribe, handleUpcoming } from './bot';
 import { scrapeShows } from './scraper';
 import { initSupabase, getSupabase } from './db';
 import type { Env, TelegramUpdate } from './types';
 
 const subscribeRegex = /\/subscribe (\d+)/;
+const unsubscribeRegex = /\/unsubscribe (\d+)/;
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -28,6 +29,11 @@ export default {
         await handleSubscribe(msg, match);
       } else if (msg.text === '/posters') {
         await handlePosters(msg);
+      } else if (msg.text?.startsWith('/unsubscribe')) {
+        const match = unsubscribeRegex.exec(msg.text);
+        await handleUnsubscribe(msg, match);
+      } else if (msg.text === '/upcoming') {
+        await handleUpcoming(msg);
       }
 
       return new Response('OK');
@@ -42,8 +48,6 @@ export default {
     initSupabase(env);
 
     const shows = await scrapeShows();
-    console.log('Scraped shows:', JSON.stringify(shows, null, 2));
-
     const supabase = getSupabase();
     const { data: existingShows, error: selectError } = await supabase.from('shows').select();
     if (selectError) {
