@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ -f ".dev.vars" ]; then
+  export $(cat .dev.vars | xargs)
+fi
+
 if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_BOT_SECRET" ]; then
   echo "Error: TELEGRAM_BOT_TOKEN and TELEGRAM_BOT_SECRET must be set"
   exit 1
