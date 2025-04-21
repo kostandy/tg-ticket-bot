@@ -30,7 +30,6 @@ export default [
       '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
 
       // General rules
-      'no-console': ['error', { allow: ['warn', 'error'] }],
       'no-debugger': 'error',
       'no-duplicate-imports': 'error',
       'no-unused-vars': 'off', // Turned off in favor of @typescript-eslint/no-unused-vars
