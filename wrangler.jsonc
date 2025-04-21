@@ -7,7 +7,7 @@
   ],
   "workers_dev": true,
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["*/5 * * * *"]
   },
   "vars": {
     "TARGET_WEBSITE": "https://molodyytheatre.com/afisha",
