@@ -1,7 +1,7 @@
 #!/bin/bash
 
-if [ -f ".dev.vars" ]; then
-  export $(cat .dev.vars | xargs)
+if [ -f "../.dev.vars" ]; then
+  export $(cat ../.dev.vars | xargs)
 fi
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_BOT_SECRET" ]; then

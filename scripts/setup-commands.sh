@@ -1,7 +1,7 @@
 #!/bin/bash
 
-if [ -f .dev.vars ]; then
-  source .dev.vars
+if [ -f "../.dev.vars" ]; then
+  export $(cat ../.dev.vars | xargs)
 fi
 
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then

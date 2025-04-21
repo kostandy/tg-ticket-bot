@@ -1,4 +1,4 @@
-import { handleStart, handleSubscribe, notifySubscribers } from './bot';
+import { handleStart, handleSubscribe } from './bot';
 import { scrapeShows } from './scraper';
 import { supabase } from './db';
 import type { Env, TelegramUpdate } from './types';
