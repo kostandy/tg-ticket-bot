@@ -9,8 +9,13 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  "preview_urls": false,
+  "minify": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1.0
+  },
   "vars": {
-    "TARGET_WEBSITE": "https://molodyytheatre.com/afisha",
-    "CHECK_INTERVAL": "3600"
+    "TARGET_WEBSITE": "https://molodyytheatre.com/afisha"
   }
 }
