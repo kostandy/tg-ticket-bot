@@ -111,4 +111,4 @@ export const handleUpcoming = async (msg: TelegramMessage) => {
     console.error('Failed to handle upcoming:', error);
     await telegram.sendMessage(msg.chat.id, { text: 'Не вдалося отримати список вистав' });
   }
-}; 
+};
