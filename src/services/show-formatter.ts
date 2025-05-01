@@ -2,13 +2,18 @@ import type { Show, ShowFormatter, FormattedMessage } from '../types.js';
 
 export class DefaultShowFormatter implements ShowFormatter {
   format(show: Show): FormattedMessage {
-    const dates = show.dates.map((date) => `🗓 ${date}`).join('\n');
-    const soldOutText = show.soldOut ? '\n🔴 КВИТКИ ПРОДАНО' : '\n🟢 Квитки в продажу';
-    
+    const datesList = show.dates.map(date => {
+      const soldOut = show.soldOutByDate[date] ? ' (Sold Out)' : '';
+      return `- ${date}${soldOut}`;
+    }).join('\n');
+
+    const text = `*${show.title}*\n\nDates:\n${datesList}`;
+
     return {
-      text: `[${show.title}](${show.url})\n${dates}${soldOutText}`,
-      ticketUrl: !show.soldOut ? show.ticketUrl : undefined,
-      imageUrl: show.imageUrl
+      text,
+      ticketUrl: show.ticketUrl,
+      imageUrl: show.imageUrl,
+      parse_mode: 'Markdown'
     };
   }
 } 

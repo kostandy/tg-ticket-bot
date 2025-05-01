@@ -6,7 +6,7 @@ export interface Show {
   imageUrl: string;
   ticketUrl: string;
   soldOut: boolean;
-  sold_out_by_date: Record<string, boolean>;
+  soldOutByDate: Record<string, boolean>;
 }
 
 export interface UserSubscription {
