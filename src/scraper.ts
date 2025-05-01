@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 const STORAGE_MODE = process.env.STORAGE_MODE === 'file';
 const MAX_RETRIES = 3;
 const RATE_LIMIT_DELAY = 2000;
-const MAX_CONCURRENT_JOBS = 3;
+const MAX_CONCURRENT_JOBS = 1;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const BASE_URL = 'https://molodyytheatre.com';
 
