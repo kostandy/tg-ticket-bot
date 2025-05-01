@@ -49,7 +49,8 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
         dates,
         imageUrl,
         ticketUrl,
-        soldOut
+        soldOut,
+        sold_out_by_date: {}
       });
     }
   });
@@ -207,10 +208,10 @@ class JobQueue {
     const dayShows = await scrapeDay(job.url);
     const existingFileName = await this.findExistingFile(job.day);
     const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
-    const posterMap = new Map<string, Show & { soldOutByDate: Record<string, boolean> }>();
+    const posterMap = new Map<string, Show>();
     
-    for (const show of storedShows as (Show & { soldOutByDate?: Record<string, boolean> })[]) {
-      posterMap.set(show.id, { ...show, soldOutByDate: show.soldOutByDate || {} });
+    for (const show of storedShows) {
+      posterMap.set(show.id, { ...show, sold_out_by_date: show.sold_out_by_date || {} });
     }
     
     for (const show of dayShows) {
@@ -218,15 +219,15 @@ class JobQueue {
         posterMap.set(show.id, {
           ...show,
           dates: [job.day],
-          soldOutByDate: { [job.day]: !!show.soldOut }
-        });
+          sold_out_by_date: { [job.day]: !!show.soldOut }
+        } as Show);
       } else {
-        const poster = posterMap.get(show.id) ?? {} as Show & { soldOutByDate: Record<string, boolean> };
+        const poster = posterMap.get(show.id);
         if (poster) {
-          if (!poster?.dates.includes(job.day)) {
-            poster?.dates.push(job.day);
+          if (!poster.dates.includes(job.day)) {
+            poster.dates.push(job.day);
           }
-          poster.soldOutByDate[job.day] = !!show.soldOut;
+          poster.sold_out_by_date[job.day] = !!show.soldOut;
         }
       }
     }
@@ -263,10 +264,10 @@ class JobQueue {
             console.log('Inserted show:', show.title);
           } else {
             const mergedDates = Array.from(new Set([...(existingShow.dates || []), ...(show.dates || [])]));
-            const mergedSoldOutByDate = { ...(existingShow.soldOutByDate || {}), ...(show.soldOutByDate || {}) };
+            const mergedSoldOutByDate = { ...(existingShow.sold_out_by_date || {}), ...(show.sold_out_by_date || {}) };
             const { error: updateError } = await supabase
               .from('shows')
-              .update({ dates: mergedDates, soldOutByDate: mergedSoldOutByDate })
+              .update({ dates: mergedDates, sold_out_by_date: mergedSoldOutByDate })
               .eq('id', show.id);
             if (updateError) throw updateError;
             console.log('Updated show:', show.title);

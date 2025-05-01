@@ -3,9 +3,10 @@ export interface Show {
   title: string;
   url: string;
   dates: string[];
-  soldOut?: boolean;
-  ticketUrl?: string;
-  imageUrl?: string;
+  imageUrl: string;
+  ticketUrl: string;
+  soldOut: boolean;
+  sold_out_by_date: Record<string, boolean>;
 }
 
 export interface UserSubscription {
