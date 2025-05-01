@@ -305,7 +305,7 @@ class JobQueue {
 
   async waitForCompletion(): Promise<Show[]> {
     while (this.running > 0 || this.queue.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     return this.results;
   }
