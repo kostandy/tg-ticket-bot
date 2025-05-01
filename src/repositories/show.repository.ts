@@ -1,5 +1,5 @@
-import type { Show, ShowRepository } from '../types';
-import { getSupabase } from '../db';
+import type { Show, ShowRepository } from '../types.js';
+import { getSupabase } from '../db.js';
 
 export class SupabaseShowRepository implements ShowRepository {
   async findAll(): Promise<Show[]> {

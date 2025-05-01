@@ -1,4 +1,4 @@
-import type { Show, ShowFormatter, FormattedMessage } from '../types';
+import type { Show, ShowFormatter, FormattedMessage } from '../types.js';
 
 export class DefaultShowFormatter implements ShowFormatter {
   format(show: Show): FormattedMessage {

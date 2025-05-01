@@ -68,8 +68,8 @@ npm run deploy
 curl https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>/webhook
 ```
 
-## Environment Variables
+5. Scrape shows:
 
-The following environment variables are configured in Cloudflare Workers:
-
-- `TARGET_WEBSITE`: The website to scrape for shows (default: https://molodyytheatre.com/afisha)
+```bash
+npm run scrape
+```

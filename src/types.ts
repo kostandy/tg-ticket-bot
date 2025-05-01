@@ -37,7 +37,6 @@ export interface Env {
   TELEGRAM_BOT_SECRET: string;
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
-  TARGET_WEBSITE: string;
 }
 
 export interface TelegramUser {

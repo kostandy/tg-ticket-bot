@@ -1,7 +1,7 @@
-import { handleStart, handleSubscribe, handlePosters, handleUnsubscribe, handleUpcoming } from './bot';
-import { scrapeShows } from './scraper';
-import { initSupabase, getSupabase } from './db';
-import type { Env, TelegramUpdate } from './types';
+import { handleStart, handleSubscribe, handlePosters, handleUnsubscribe, handleUpcoming } from './bot.js';
+import { scrapeShows } from './scraper.js';
+import { initSupabase, getSupabase } from './db.js';
+import type { Env, TelegramUpdate } from './types.js';
 
 const subscribeRegex = /\/subscribe (\d+)/;
 const unsubscribeRegex = /\/unsubscribe (\d+)/;

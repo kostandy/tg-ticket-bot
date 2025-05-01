@@ -1,5 +1,5 @@
-import type { SubscriptionRepository } from '../types';
-import { getSupabase } from '../db';
+import type { SubscriptionRepository } from '../types.js';
+import { getSupabase } from '../db.js';
 
 export class SupabaseSubscriptionRepository implements SubscriptionRepository {
   async subscribe(chatId: number, showId: string): Promise<void> {

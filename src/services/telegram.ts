@@ -1,4 +1,4 @@
-import type { FormattedMessage, ReplyMarkup } from '../types';
+import type { FormattedMessage, ReplyMarkup } from '../types.js';
 
 export class TelegramService {
   private readonly token: string;

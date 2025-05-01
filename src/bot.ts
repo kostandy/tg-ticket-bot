@@ -1,8 +1,8 @@
-import type { Show, TelegramMessage } from './types';
-import { TelegramService } from './services/telegram';
-import { DefaultShowFormatter } from './services/show-formatter';
-import { SupabaseShowRepository } from './repositories/show.repository';
-import { SupabaseSubscriptionRepository } from './repositories/subscription.repository';
+import type { Show, TelegramMessage } from './types.js';
+import { TelegramService } from './services/telegram.js';
+import { DefaultShowFormatter } from './services/show-formatter.js';
+import { SupabaseShowRepository } from './repositories/show.repository.js';
+import { SupabaseSubscriptionRepository } from './repositories/subscription.repository.js';
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error('Missing Telegram bot token');

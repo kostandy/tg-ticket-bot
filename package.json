@@ -9,24 +9,22 @@
     "typecheck": "tsc --noEmit",
     "types": "wrangler types",
     "build": "tsc --project tsconfig.json",
-    "test": "vitest",
-    "test:integration": "vitest integration"
+    "scrape": "STORAGE_MODE=file tsc && node --env-file=.dev.vars --experimental-specifier-resolution=node dist/scraper.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
-    "@types/puppeteer": "^5.4.7",
     "cheerio": "^1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",
-    "@types/node": "^22.14.1",
-    "@typescript-eslint/eslint-plugin": "^8.30.1",
-    "@typescript-eslint/parser": "^8.30.1",
+    "@types/node": "^22.15.2",
+    "@typescript-eslint/eslint-plugin": "^8.31.0",
+    "@typescript-eslint/parser": "^8.31.0",
     "dotenv": "^16.5.0",
-    "eslint": "^9.25.0",
+    "eslint": "^9.25.1",
     "globals": "^16.0.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.2",
-    "wrangler": "^4.12.0"
+    "wrangler": "^4.13.2"
   }
 }
