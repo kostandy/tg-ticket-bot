@@ -1,27 +1,27 @@
 import * as cheerio from 'cheerio';
-import type { Show } from './types';
-import { getSupabase } from './db';
+import type { Show } from './types.js';
+import { getSupabase, initSupabase } from './db.js';
+import { getStoredShows, storeShows } from './storage/file.js';
+import { createHash } from 'node:crypto';
 
-const targetWebsite = process.env.TARGET_WEBSITE;
+const STORAGE_MODE = process.env.STORAGE_MODE === 'file';
 const MAX_RETRIES = 3;
 const RATE_LIMIT_DELAY = 2000;
+const MAX_CONCURRENT_JOBS = 3;
+const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const BASE_URL = 'https://molodyytheatre.com';
 
-if (!targetWebsite) {
-  throw new Error('Missing TARGET_WEBSITE environment variable');
-}
+console.log('STORAGE_MODE', STORAGE_MODE);
 
-interface DrupalAjaxCommand {
-  command: string;
-  method: string;
-  selector: string;
-  data: string;
-  settings: null;
-}
-
-interface FetchOptions {
-  method?: string;
-  headers?: Record<string, string>;
-  body?: string;
+if (!STORAGE_MODE) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_KEY;
+  
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Missing Supabase credentials');
+  }
+  
+  initSupabase({ SUPABASE_URL: supabaseUrl, SUPABASE_KEY: supabaseKey });
 }
 
 const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
@@ -57,12 +57,14 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
   return shows;
 };
 
-const fetchWithRetry = async (url: string, options?: FetchOptions): Promise<Response> => {
+const fetchWithRetry = async (url: string, options: Record<string, unknown> = {}): Promise<Response> => {
   let lastError;
-  
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, {
+        ...options,
+        headers: { ...(options.headers || {}), 'User-Agent': USER_AGENT },
+      });
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       return response;
     } catch (error) {
@@ -71,45 +73,7 @@ const fetchWithRetry = async (url: string, options?: FetchOptions): Promise<Resp
       await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
     }
   }
-  
   throw lastError;
-};
-
-const fetchPage = async (url: string, page: number): Promise<Show[]> => {
-  if (page === 0) {
-    const response = await fetch(url);
-    const html = await response.text();
-    return parseShowsFromHtml(cheerio.load(html));
-  }
-
-  const payload = new URLSearchParams({
-    page: page.toString(),
-    view_name: 'afisha',
-    view_display_id: 'page',
-    view_args: '',
-    view_path: url.replace('https://molodyytheatre.com/', ''),
-    view_base_path: 'afisha',
-    view_dom_id: Date.now().toString(36),
-    pager_element: '0'
-  });
-
-  const response = await fetch('https://molodyytheatre.com/views/ajax', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'X-Requested-With': 'XMLHttpRequest'
-    },
-    body: payload.toString()
-  });
-
-  const data = await response.json() as DrupalAjaxCommand[];
-  const html = data.find(item => item.command === 'insert')?.data || '';
-  return parseShowsFromHtml(cheerio.load(html));
-};
-
-const getNextMonthUrl = ($: cheerio.CheerioAPI): string | null => {
-  const nextMonthLink = $('#afisha-date-list .next.last a').attr('href');
-  return nextMonthLink ? `https://molodyytheatre.com${nextMonthLink}` : null;
 };
 
 const hasNoEvents = ($: cheerio.CheerioAPI): boolean => {
@@ -117,93 +81,269 @@ const hasNoEvents = ($: cheerio.CheerioAPI): boolean => {
   return emptyMessage === 'На обрану дату немає заходів.';
 };
 
-const scrapeMonth = async (url: string): Promise<Show[]> => {
-  console.log(`Scraping month from ${url}`);
-  const shows: Show[] = [];
-  let page = 0;
-
+const scrapeDay = async (url: string): Promise<Show[]> => {
+  console.log(`Scraping day from ${url}`);
   try {
-    while (true) {
-      console.log(`Fetching page ${page}...`);
-      const monthShows = await fetchPage(url, page);
-      
-      if (!monthShows.length) {
-        break;
-      }
-      
-      shows.push(...monthShows);
-      page++;
-      
-      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
-    }
+    const response = await fetchWithRetry(url);
+    const html = await response.text();
+    return parseShowsFromHtml(cheerio.load(html));
   } catch (error) {
-    console.error(`Error scraping month ${url}:`, error);
-  }
-
-  return shows;
-};
-
-const saveShowsToDb = async (shows: Show[]): Promise<void> => {
-  const supabase = getSupabase();
-  const { data: existingShows, error: selectError } = await supabase.from('shows').select();
-  
-  if (selectError) {
-    console.error('Failed to fetch existing shows:', selectError);
-    return;
-  }
-
-  for (const show of shows) {
-    const existingShow = existingShows?.find((s) => s.title === show.title);
-    
-    try {
-      if (!existingShow) {
-        const { error: insertError } = await supabase.from('shows').insert(show);
-        if (insertError) throw insertError;
-        console.log('Inserted show:', show.title);
-      } else if (JSON.stringify(existingShow.dates) !== JSON.stringify(show.dates)) {
-        const { error: updateError } = await supabase
-          .from('shows')
-          .update({ dates: show.dates })
-          .eq('id', show.id);
-        if (updateError) throw updateError;
-        console.log('Updated show:', show.title);
-      }
-      await new Promise(resolve => setTimeout(resolve, 500));
-    } catch (error) {
-      console.error(`Error saving show ${show.title}:`, error);
-    }
+    console.error(`Error scraping day ${url}:`, error);
+    return [];
   }
 };
 
-export const scrapeShows = async (): Promise<Show[]> => {
-  console.info('Scraping shows from', targetWebsite);
-  const allShows: Show[] = [];
-  let currentUrl = targetWebsite;
-  
-  while (currentUrl) {
+const getDayFromUrl = (url: string): string => {
+  const match = url.match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : new Date().toISOString().slice(0, 10);
+};
+
+const findDatesWithEvents = async (startDate: string): Promise<string[]> => {
+  console.log(`Finding dates with events starting from ${startDate}`);
+  const datesWithEvents: string[] = [];
+  let currentDateUrl = `${BASE_URL}/afisha/${startDate}`;
+  let hasMoreMonths = true;
+
+  while (hasMoreMonths) {
+    console.log(`Checking calendar at ${currentDateUrl}`);
     try {
-      const response = await fetchWithRetry(currentUrl);
+      const response = await fetchWithRetry(currentDateUrl);
       const html = await response.text();
       const $ = cheerio.load(html);
+      
+      // Find all dates with events in the current month
+      let foundEventsInCurrentMonth = false;
+      
+      $('#afisha-date-list > li.future').each((_, element) => {
+        const $el = $(element);
+        const hasEvent = $el.find('a').length > 0;
 
-      if (hasNoEvents($)) {
-        break;
+        console.log('Found the following number of events', $el.find('a').length);
+
+        if (hasEvent) {
+          console.log('Found events in current month');
+          foundEventsInCurrentMonth = true;
+          const dateLink = $el.find('a').attr('href');
+          if (dateLink) {
+            const fullUrl = dateLink.startsWith('http') ? dateLink : `${BASE_URL}${dateLink}`;
+            const day = getDayFromUrl(fullUrl);
+            datesWithEvents.push(day);
+          }
+        }
+      });
+      
+      // Check if there's a next month to check
+      const nextMonthButton = $('#afisha-date-list li.next.last a');
+      if (nextMonthButton.length > 0 && foundEventsInCurrentMonth) {
+        const nextMonthUrl = nextMonthButton.attr('href');
+        if (nextMonthUrl) {
+          currentDateUrl = nextMonthUrl.startsWith('http') ? nextMonthUrl : `${BASE_URL}${nextMonthUrl}`;
+        } else {
+          hasMoreMonths = false;
+        }
+      } else {
+        hasMoreMonths = false;
       }
-
-      const monthShows = await scrapeMonth(currentUrl);
-      if (monthShows.length) {
-        await saveShowsToDb(monthShows);
-        allShows.push(...monthShows);
-      }
-
-      currentUrl = getNextMonthUrl($) || '';
-      await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
-      console.error(`Error processing URL ${currentUrl}:`, error);
-      break;
+      console.error('Error finding dates with events:', error);
+      hasMoreMonths = false;
     }
   }
   
+  // Sort dates chronologically
+  datesWithEvents.sort();
+  console.log(`Found ${datesWithEvents.length} dates with events`);
+  return datesWithEvents;
+};
+
+interface Job {
+  url: string;
+  day: string;
+}
+
+class JobQueue {
+  private queue: Job[] = [];
+  private running = 0;
+  private results: Show[] = [];
+
+  constructor(private maxConcurrent: number) {}
+
+  add(job: Job) {
+    this.queue.push(job);
+    this.processNext();
+  }
+
+  private async processNext() {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    this.running++;
+    const job = this.queue[0];
+    this.queue = this.queue.slice(1);
+    
+    try {
+      const shows = await this.processJob(job);
+      this.results.push(...shows);
+    } catch (error) {
+      console.error(`Error processing job for ${job.url}:`, error);
+    } finally {
+      this.running--;
+      this.processNext();
+    }
+  }
+
+  private async processJob(job: Job): Promise<Show[]> {
+    const response = await fetchWithRetry(job.url);
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    
+    if (hasNoEvents($)) {
+      return [];
+    }
+    
+    const dayShows = await scrapeDay(job.url);
+    const existingFileName = await this.findExistingFile(job.day);
+    const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
+    const posterMap = new Map<string, Show & { soldOutByDate: Record<string, boolean> }>();
+    
+    for (const show of storedShows as (Show & { soldOutByDate?: Record<string, boolean> })[]) {
+      posterMap.set(show.id, { ...show, soldOutByDate: show.soldOutByDate || {} });
+    }
+    
+    for (const show of dayShows) {
+      if (!posterMap.has(show.id)) {
+        posterMap.set(show.id, {
+          ...show,
+          dates: [job.day],
+          soldOutByDate: { [job.day]: !!show.soldOut }
+        });
+      } else {
+        const poster = posterMap.get(show.id) ?? {} as Show & { soldOutByDate: Record<string, boolean> };
+        if (poster) {
+          if (!poster?.dates.includes(job.day)) {
+            poster?.dates.push(job.day);
+          }
+          poster.soldOutByDate[job.day] = !!show.soldOut;
+        }
+      }
+    }
+    
+    const mergedShows = Array.from(posterMap.values());
+    
+    if (STORAGE_MODE) {
+      const contentHash = this.calculateHash(mergedShows).slice(0, 10);
+      const newFileName = `posters-${job.day}-${contentHash}`;
+      
+      if (!existingFileName || existingFileName.split('-').pop()?.split('.')[0] !== contentHash) {
+        if (existingFileName) {
+          await this.deleteFile(existingFileName);
+        }
+        await storeShows(newFileName, mergedShows);
+      } else {
+        console.log(`Content unchanged for ${job.day}, skipping storage`);
+      }
+    } else {
+      const supabase = getSupabase();
+      const { data: existingShows, error: selectError } = await supabase.from('shows').select();
+      
+      if (selectError) {
+        console.error('Failed to fetch existing shows:', selectError);
+        return mergedShows;
+      }
+      
+      for (const show of mergedShows) {
+        const existingShow = existingShows?.find((s: { id: string }) => s.id === show.id);
+        try {
+          if (!existingShow) {
+            const { error: insertError } = await supabase.from('shows').insert(show);
+            if (insertError) throw insertError;
+            console.log('Inserted show:', show.title);
+          } else {
+            const mergedDates = Array.from(new Set([...(existingShow.dates || []), ...(show.dates || [])]));
+            const mergedSoldOutByDate = { ...(existingShow.soldOutByDate || {}), ...(show.soldOutByDate || {}) };
+            const { error: updateError } = await supabase
+              .from('shows')
+              .update({ dates: mergedDates, soldOutByDate: mergedSoldOutByDate })
+              .eq('id', show.id);
+            if (updateError) throw updateError;
+            console.log('Updated show:', show.title);
+          }
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          console.error(`Error saving show ${show.title}:`, error);
+        }
+      }
+    }
+    
+    return mergedShows;
+  }
+
+  private calculateHash(data: Show[]): string {
+    return createHash('sha256').update(JSON.stringify(data)).digest('hex');
+  }
+
+  private async findExistingFile(day: string): Promise<string | null> {
+    try {
+      const response = await fetch(`data/posters/posters-${day}-*.json`);
+      const files = await response.json() as string[];
+      return files[0] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async deleteFile(fileName: string): Promise<void> {
+    try {
+      await fetch(`data/posters/${fileName}`, { method: 'DELETE' });
+    } catch (error) {
+      console.error(`Error deleting file ${fileName}:`, error);
+    }
+  }
+
+  async waitForCompletion(): Promise<Show[]> {
+    while (this.running > 0 || this.queue.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return this.results;
+  }
+}
+
+export const scrapeShows = async (): Promise<Show[]> => {
+  const today = new Date().toISOString().slice(0, 10);
+  console.log('today', today);
+  
+  // Phase 1: Find all dates with events
+  const datesToScrape = await findDatesWithEvents(today);
+  if (datesToScrape.length === 0) {
+    console.log('No dates with events found');
+    return [];
+  }
+
+  console.log('Building a scraping list is over. datesToScrape:', datesToScrape);
+
+  // Phase 2: Process shows in parallel using job queue
+  const jobQueue = new JobQueue(MAX_CONCURRENT_JOBS);
+  
+  for (const day of datesToScrape) {
+    const currentUrl = `${BASE_URL}/afisha/${day}`;
+    jobQueue.add({ url: currentUrl, day });
+  }
+
+  const allShows = await jobQueue.waitForCompletion();
   console.log(`Found ${allShows.length} shows in total`);
   return allShows;
-}; 
+};
+
+// Direct execution support
+if (import.meta.url === `file://${process.argv[1]}`) {
+  try {
+    await scrapeShows();
+    console.log('Scraping completed successfully');
+  } catch (error) {
+    console.error('Error during scraping:', error);
+    process.exit(1);
+  }
+} 
