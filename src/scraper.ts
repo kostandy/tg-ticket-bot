@@ -146,7 +146,7 @@ const findDatesWithEvents = async (startDate: string): Promise<string[]> => {
         hasMoreMonths = false;
       }
       
-      await new Promise(resolve => setTimeout(resolve, 10000));
+      await new Promise(resolve => setTimeout(resolve, 60000));
     } catch (error) {
       console.error('Error finding dates with events:', error);
       hasMoreMonths = false;
