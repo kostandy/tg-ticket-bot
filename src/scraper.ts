@@ -4,12 +4,26 @@ import { getSupabase, initSupabase } from './db.js';
 import { getStoredShows, storeShows } from './storage/file.js';
 import { createHash } from 'node:crypto';
 
+// Define Cloudflare-specific fetch options
+interface CloudflareFetchOptions {
+  headers?: Record<string, string>;
+  method?: string;
+  body?: string;
+  cf?: {
+    cacheTtl?: number;
+    cacheEverything?: boolean;
+  };
+}
+
 const STORAGE_MODE = process.env.STORAGE_MODE === 'file';
 const MAX_RETRIES = 3;
 const RATE_LIMIT_DELAY = 2000;
 const MAX_CONCURRENT_JOBS = 1;
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const BASE_URL = 'https://molodyytheatre.com';
+// Cloudflare Worker limits
+const MAX_SUBREQUESTS = 45; // Keep below the 50 limit to be safe
+const CHUNK_SIZE = 10; // Number of days to process in one invocation
 
 console.log('STORAGE_MODE', STORAGE_MODE);
 
@@ -23,6 +37,9 @@ if (!STORAGE_MODE) {
   
   initSupabase({ SUPABASE_URL: supabaseUrl, SUPABASE_KEY: supabaseKey });
 }
+
+// Keep track of subrequests to respect Cloudflare limits
+let subrequestCount = 0;
 
 const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
   const shows: Show[] = [];
@@ -58,19 +75,60 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
   return shows;
 };
 
+// Cache for already fetched pages to avoid duplicate requests
+const pageCache = new Map<string, string>();
+
 const fetchWithRetry = async (url: string, options: Record<string, unknown> = {}): Promise<Response> => {
+  // Check if we've hit the subrequest limit
+  if (subrequestCount >= MAX_SUBREQUESTS) {
+    throw new Error('Subrequest limit reached');
+  }
+  
+  // Check cache first
+  if (pageCache.has(url)) {
+    console.log(`Using cached response for ${url}`);
+    const cachedResponse = new Response(pageCache.get(url), {
+      headers: { 'Content-Type': 'text/html' },
+      status: 200
+    });
+    return cachedResponse;
+  }
+  
   let lastError;
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
-      const response = await fetch(url, {
+      console.log(`Fetching ${url} (subrequest ${subrequestCount + 1}/${MAX_SUBREQUESTS})`);
+      subrequestCount++;
+      
+      const fetchOptions: CloudflareFetchOptions = {
         ...options,
         headers: { ...(options.headers || {}), 'User-Agent': USER_AGENT },
-      });
+        cf: { cacheTtl: 7200, cacheEverything: true } // Cache for 2 hours
+      };
+      
+      const response = await fetch(url, fetchOptions);
+      
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      return response;
-    } catch (error) {
+      
+      // Cache the response
+      const text = await response.text();
+      pageCache.set(url, text);
+      
+      return new Response(text, {
+        headers: response.headers,
+        status: response.status
+      });
+    } catch (error: unknown) {
       console.error(`Attempt ${i + 1} failed:`, error);
       lastError = error;
+      
+      // If we hit the subrequest limit, don't retry
+      if (error instanceof Error && 
+         (error.message === 'Subrequest limit reached' || 
+          error.message === 'Too many subrequests')) {
+        throw error;
+      }
+      
       await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
     }
   }
@@ -102,60 +160,40 @@ const getDayFromUrl = (url: string): string => {
 const findDatesWithEvents = async (startDate: string): Promise<string[]> => {
   console.log(`Finding dates with events starting from ${startDate}`);
   const datesWithEvents: string[] = [];
-  let currentDateUrl = `${BASE_URL}/afisha/${startDate}`;
-  let hasMoreMonths = true;
+  const currentDateUrl = `${BASE_URL}/afisha/${startDate}`;
 
-  while (hasMoreMonths) {
+  try {
+    // First request to get initial dates
     console.log(`Checking calendar at ${currentDateUrl}`);
-    try {
-      const response = await fetchWithRetry(currentDateUrl);
-      const html = await response.text();
-      const $ = cheerio.load(html);
+    const response = await fetchWithRetry(currentDateUrl);
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    
+    // Find all dates with events in the current month
+    $('#afisha-date-list > li.future').each((_, element) => {
+      const $el = $(element);
+      const hasEvent = $el.find('a').length > 0;
       
-      // Find all dates with events in the current month
-      let foundEventsInCurrentMonth = false;
-      
-      $('#afisha-date-list > li.future').each((_, element) => {
-        const $el = $(element);
-        const hasEvent = $el.find('a').length > 0;
-
-        console.log('Found the following number of events', $el.find('a').length);
-
-        if (hasEvent) {
-          console.log('Found events in current month');
-          foundEventsInCurrentMonth = true;
-          const dateLink = $el.find('a').attr('href');
-          if (dateLink) {
-            const fullUrl = dateLink.startsWith('http') ? dateLink : `${BASE_URL}${dateLink}`;
-            const day = getDayFromUrl(fullUrl);
-            datesWithEvents.push(day);
-          }
+      if (hasEvent) {
+        const dateLink = $el.find('a').attr('href');
+        if (dateLink) {
+          const fullUrl = dateLink.startsWith('http') ? dateLink : `${BASE_URL}${dateLink}`;
+          const day = getDayFromUrl(fullUrl);
+          datesWithEvents.push(day);
         }
-      });
-      
-      // Check if there's a next month to check
-      const nextMonthButton = $('#afisha-date-list li.next.last a');
-      if (nextMonthButton.length > 0 && foundEventsInCurrentMonth) {
-        const nextMonthUrl = nextMonthButton.attr('href');
-        if (nextMonthUrl) {
-          currentDateUrl = nextMonthUrl.startsWith('http') ? nextMonthUrl : `${BASE_URL}${nextMonthUrl}`;
-        } else {
-          hasMoreMonths = false;
-        }
-      } else {
-        hasMoreMonths = false;
       }
-      
-      await new Promise(resolve => setTimeout(resolve, 60000));
-    } catch (error) {
-      console.error('Error finding dates with events:', error);
-      hasMoreMonths = false;
-    }
+    });
+    
+    // We don't need to navigate to next month to stay within limits
+    console.log(`Found ${datesWithEvents.length} dates with events in current month`);
+    
+  } catch (error) {
+    console.error('Error finding dates with events:', error);
   }
   
   // Sort dates chronologically
   datesWithEvents.sort();
-  console.log(`Found ${datesWithEvents.length} dates with events`);
+  console.log(`Found ${datesWithEvents.length} dates with events in total`);
   return datesWithEvents;
 };
 
@@ -188,8 +226,16 @@ class JobQueue {
     try {
       const shows = await this.processJob(job);
       this.results.push(...shows);
-    } catch (error) {
+    } catch (error: unknown) {
       console.error(`Error processing job for ${job.url}:`, error);
+      
+      // If we hit the subrequest limit, stop processing
+      if (error instanceof Error && 
+         (error.message === 'Subrequest limit reached' || 
+          error.message === 'Too many subrequests')) {
+        console.log('Stopping job processing due to subrequest limit');
+        return;
+      }
     } finally {
       this.running--;
       this.processNext();
@@ -197,89 +243,100 @@ class JobQueue {
   }
 
   private async processJob(job: Job): Promise<Show[]> {
-    const response = await fetchWithRetry(job.url);
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    
-    if (hasNoEvents($)) {
+    try {
+      const response = await fetchWithRetry(job.url);
+      const html = await response.text();
+      const $ = cheerio.load(html);
+      
+      if (hasNoEvents($)) {
+        return [];
+      }
+      
+      const dayShows = await scrapeDay(job.url);
+      const existingFileName = await this.findExistingFile(job.day);
+      const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
+      const posterMap = new Map<string, Show>();
+      
+      for (const show of storedShows) {
+        posterMap.set(show.id, { ...show, soldOutByDate: show.soldOutByDate || {} });
+      }
+      
+      for (const show of dayShows) {
+        if (!posterMap.has(show.id)) {
+          posterMap.set(show.id, {
+            ...show,
+            dates: [job.day],
+            soldOutByDate: { [job.day]: !!show.soldOut }
+          } as Show);
+        } else {
+          const poster = posterMap.get(show.id);
+          if (poster) {
+            if (!poster.dates.includes(job.day)) {
+              poster.dates.push(job.day);
+            }
+            poster.soldOutByDate[job.day] = !!show.soldOut;
+          }
+        }
+      }
+      
+      const mergedShows = Array.from(posterMap.values());
+      
+      if (STORAGE_MODE) {
+        const contentHash = this.calculateHash(mergedShows).slice(0, 10);
+        const newFileName = `posters-${job.day}-${contentHash}`;
+        
+        if (!existingFileName || existingFileName.split('-').pop()?.split('.')[0] !== contentHash) {
+          if (existingFileName) {
+            await this.deleteFile(existingFileName);
+          }
+          await storeShows(newFileName, mergedShows);
+        } else {
+          console.log(`Content unchanged for ${job.day}, skipping storage`);
+        }
+      } else {
+        const supabase = getSupabase();
+        const { data: existingShows, error: selectError } = await supabase.from('shows').select();
+        
+        if (selectError) {
+          console.error('Failed to fetch existing shows:', selectError);
+          return mergedShows;
+        }
+        
+        for (const show of mergedShows) {
+          const existingShow = existingShows?.find((s: { id: string }) => s.id === show.id);
+          try {
+            if (!existingShow) {
+              const { error: insertError } = await supabase.from('shows').insert(show);
+              if (insertError) throw insertError;
+              console.log('Inserted show:', show.title);
+            } else {
+              const mergedDates = Array.from(new Set([...(existingShow.dates || []), ...(show.dates || [])]));
+              const mergedSoldOutByDate = { ...(existingShow.soldOutByDate || {}), ...(show.soldOutByDate || {}) };
+              const { error: updateError } = await supabase
+                .from('shows')
+                .update({ dates: mergedDates, soldOutByDate: mergedSoldOutByDate })
+                .eq('id', show.id);
+              if (updateError) throw updateError;
+              console.log('Updated show:', show.title);
+            }
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (error) {
+            console.error(`Error saving show ${show.title}:`, error);
+          }
+        }
+      }
+      
+      return mergedShows;
+    } catch (error: unknown) {
+      if (error instanceof Error && 
+         (error.message === 'Subrequest limit reached' || 
+          error.message === 'Too many subrequests')) {
+        console.error(`Hit subrequest limit while processing ${job.url}`);
+        throw error;
+      }
+      console.error(`Error in processJob for ${job.url}:`, error);
       return [];
     }
-    
-    const dayShows = await scrapeDay(job.url);
-    const existingFileName = await this.findExistingFile(job.day);
-    const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
-    const posterMap = new Map<string, Show>();
-    
-    for (const show of storedShows) {
-      posterMap.set(show.id, { ...show, soldOutByDate: show.soldOutByDate || {} });
-    }
-    
-    for (const show of dayShows) {
-      if (!posterMap.has(show.id)) {
-        posterMap.set(show.id, {
-          ...show,
-          dates: [job.day],
-          soldOutByDate: { [job.day]: !!show.soldOut }
-        } as Show);
-      } else {
-        const poster = posterMap.get(show.id);
-        if (poster) {
-          if (!poster.dates.includes(job.day)) {
-            poster.dates.push(job.day);
-          }
-          poster.soldOutByDate[job.day] = !!show.soldOut;
-        }
-      }
-    }
-    
-    const mergedShows = Array.from(posterMap.values());
-    
-    if (STORAGE_MODE) {
-      const contentHash = this.calculateHash(mergedShows).slice(0, 10);
-      const newFileName = `posters-${job.day}-${contentHash}`;
-      
-      if (!existingFileName || existingFileName.split('-').pop()?.split('.')[0] !== contentHash) {
-        if (existingFileName) {
-          await this.deleteFile(existingFileName);
-        }
-        await storeShows(newFileName, mergedShows);
-      } else {
-        console.log(`Content unchanged for ${job.day}, skipping storage`);
-      }
-    } else {
-      const supabase = getSupabase();
-      const { data: existingShows, error: selectError } = await supabase.from('shows').select();
-      
-      if (selectError) {
-        console.error('Failed to fetch existing shows:', selectError);
-        return mergedShows;
-      }
-      
-      for (const show of mergedShows) {
-        const existingShow = existingShows?.find((s: { id: string }) => s.id === show.id);
-        try {
-          if (!existingShow) {
-            const { error: insertError } = await supabase.from('shows').insert(show);
-            if (insertError) throw insertError;
-            console.log('Inserted show:', show.title);
-          } else {
-            const mergedDates = Array.from(new Set([...(existingShow.dates || []), ...(show.dates || [])]));
-            const mergedSoldOutByDate = { ...(existingShow.soldOutByDate || {}), ...(show.soldOutByDate || {}) };
-            const { error: updateError } = await supabase
-              .from('shows')
-              .update({ dates: mergedDates, soldOutByDate: mergedSoldOutByDate })
-              .eq('id', show.id);
-            if (updateError) throw updateError;
-            console.log('Updated show:', show.title);
-          }
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (error) {
-          console.error(`Error saving show ${show.title}:`, error);
-        }
-      }
-    }
-    
-    return mergedShows;
   }
 
   private calculateHash(data: Show[]): string {
@@ -288,6 +345,13 @@ class JobQueue {
 
   private async findExistingFile(day: string): Promise<string | null> {
     try {
+      // Check if we've hit the subrequest limit
+      if (subrequestCount >= MAX_SUBREQUESTS) {
+        console.log('Skipping file lookup due to subrequest limit');
+        return null;
+      }
+      
+      subrequestCount++;
       const response = await fetch(`data/posters/posters-${day}-*.json`);
       const files = await response.json() as string[];
       return files[0] || null;
@@ -298,6 +362,13 @@ class JobQueue {
 
   private async deleteFile(fileName: string): Promise<void> {
     try {
+      // Check if we've hit the subrequest limit
+      if (subrequestCount >= MAX_SUBREQUESTS) {
+        console.log('Skipping file deletion due to subrequest limit');
+        return;
+      }
+      
+      subrequestCount++;
       await fetch(`data/posters/${fileName}`, { method: 'DELETE' });
     } catch (error) {
       console.error(`Error deleting file ${fileName}:`, error);
@@ -307,35 +378,56 @@ class JobQueue {
   async waitForCompletion(): Promise<Show[]> {
     while (this.running > 0 || this.queue.length > 0) {
       await new Promise(resolve => setTimeout(resolve, 1000));
+      // Check for subrequest limit
+      if (subrequestCount >= MAX_SUBREQUESTS) {
+        console.log('Stopping job queue due to subrequest limit');
+        break;
+      }
     }
     return this.results;
   }
 }
 
 export const scrapeShows = async (): Promise<Show[]> => {
+  // Reset subrequest count on each invocation
+  subrequestCount = 0;
+  
   const today = new Date().toISOString().slice(0, 10);
   console.log('today', today);
   
-  // Phase 1: Find all dates with events
-  const datesToScrape = await findDatesWithEvents(today);
-  if (datesToScrape.length === 0) {
-    console.log('No dates with events found');
+  try {
+    // Phase 1: Find dates with events in current month only
+    const allDatesToScrape = await findDatesWithEvents(today);
+    if (allDatesToScrape.length === 0) {
+      console.log('No dates with events found');
+      return [];
+    }
+
+    // Phase 2: Process only a chunk of dates to respect subrequest limits
+    const datesToScrape = allDatesToScrape.slice(0, CHUNK_SIZE);
+    console.log(`Processing ${datesToScrape.length} dates out of ${allDatesToScrape.length} total`);
+
+    // Phase 3: Process shows using job queue
+    const jobQueue = new JobQueue(MAX_CONCURRENT_JOBS);
+    
+    for (const day of datesToScrape) {
+      // Check if we've hit the subrequest limit
+      if (subrequestCount >= MAX_SUBREQUESTS) {
+        console.log('Stopping adding jobs due to subrequest limit');
+        break;
+      }
+      
+      const currentUrl = `${BASE_URL}/afisha/${day}`;
+      jobQueue.add({ url: currentUrl, day });
+    }
+
+    const allShows = await jobQueue.waitForCompletion();
+    console.log(`Found ${allShows.length} shows in ${datesToScrape.length} days. Total subrequests: ${subrequestCount}`);
+    return allShows;
+  } catch (error) {
+    console.error('Error during scraping:', error);
     return [];
   }
-
-  console.log('Building a scraping list is over. datesToScrape:', datesToScrape);
-
-  // Phase 2: Process shows in parallel using job queue
-  const jobQueue = new JobQueue(MAX_CONCURRENT_JOBS);
-  
-  for (const day of datesToScrape) {
-    const currentUrl = `${BASE_URL}/afisha/${day}`;
-    jobQueue.add({ url: currentUrl, day });
-  }
-
-  const allShows = await jobQueue.waitForCompletion();
-  console.log(`Found ${allShows.length} shows in total`);
-  return allShows;
 };
 
 // Direct execution support
