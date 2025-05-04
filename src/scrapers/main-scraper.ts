@@ -1,28 +1,51 @@
 import * as cheerio from 'cheerio';
 import { fetchWithRetry, getSubrequestCount, resetSubrequestCount, setSubrequestCount } from '../http/fetch-client.js';
-import { JobQueue } from '../queues/job-queue.js';
 import { findDatesWithEvents } from './date-finder.js';
-import { parseShowsFromHtml, hasNoEvents } from './html-parser.js';
+import { parseShowsFromHtml, hasNoEvents, hasNoEventsQuickCheck, extractShowIdsFromHtml } from './html-parser.js';
 import { getCurrentDateString } from '../utils/date-utils.js';
 import { SCRAPER_CONFIG, logDebug } from '../config.js';
 import type { Show, Env } from '../types.js';
-import { initSupabase } from '../db.js';
 import { KVStorage, type ScrapingState } from '../storage/kv-storage.js';
 
-// Scrape a single day's shows
+// Scrape a single day's shows with optimized processing
 export const scrapeDay = async (url: string, day: string, kvStorage?: KVStorage | null): Promise<Show[]> => {
   logDebug(`Scraping day from ${url}`);
   try {
     const response = await fetchWithRetry(url);
     const html = await response.text();
     
-    // Use a lightweight check before loading the full cheerio parser to save CPU time
-    if (html.includes('Вибачте, наразі немає подій') || !html.includes('event-card')) {
+    // Use lightweight check before any further processing
+    if (hasNoEventsQuickCheck(html)) {
       logDebug(`No events found for ${day} (quick check)`);
       return [];
     }
     
-    // Only load cheerio if we have potential shows
+    // With KV storage and minimal HTML parsing enabled, just extract IDs first to check against KV
+    if (kvStorage && SCRAPER_CONFIG.MINIMAL_HTML_PARSING) {
+      const showIds = extractShowIdsFromHtml(html);
+      logDebug(`Quick-parsed ${showIds.length} show IDs for ${day}`);
+      
+      // Check if we need to do full parsing based on the IDs we found
+      const newShowIds = [];
+      for (const id of showIds) {
+        const exists = await kvStorage.showExists(id);
+        if (!exists) {
+          newShowIds.push(id);
+        } else {
+          logDebug(`Skipping already processed show ID: ${id}`);
+        }
+      }
+      
+      // If all shows are already in KV, return empty array to skip further processing
+      if (newShowIds.length === 0) {
+        logDebug(`All ${showIds.length} shows for ${day} already exist in KV, skipping full parse`);
+        return [];
+      }
+      
+      logDebug(`Found ${newShowIds.length} new shows to parse for ${day}`);
+    }
+    
+    // Only do full parsing with cheerio if necessary
     const $ = cheerio.load(html);
     
     if (hasNoEvents($)) {
@@ -40,12 +63,16 @@ export const scrapeDay = async (url: string, day: string, kvStorage?: KVStorage 
       for (const show of parsedShows) {
         const exists = await kvStorage.showExists(show.id);
         if (!exists) {
-          // Save the show to KV immediately
-          await kvStorage.saveShow(show);
+          // Add to process list
           showsToProcess.push(show);
         } else {
           logDebug(`Skipping already processed show: ${show.id}`);
         }
+      }
+      
+      // Save all new shows at once to reduce KV operations
+      if (showsToProcess.length > 0) {
+        await kvStorage.saveShows(showsToProcess);
       }
       
       logDebug(`Found ${parsedShows.length} shows, processed ${showsToProcess.length} new ones`);
@@ -61,6 +88,9 @@ export const scrapeDay = async (url: string, day: string, kvStorage?: KVStorage 
 
 // Main scraper function
 export const scrapeShows = async (env?: Env): Promise<Show[]> => {
+  // Start measuring execution time
+  const startTime = Date.now();
+  
   // Get KV storage if available
   let kvStorage: KVStorage | null = null;
   if (env?.SCRAPER_KV) {
@@ -70,7 +100,7 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
     logDebug('KV storage not available, running without state persistence');
   }
   
-  // Try to load previous state first
+  // Try to load previous state first - this is critical for incremental processing
   let previousState: ScrapingState | null = null;
   if (kvStorage) {
     previousState = await kvStorage.loadScraperState();
@@ -80,11 +110,11 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
   if (previousState) {
     logDebug('Resuming from previous scraping state');
     setSubrequestCount(previousState.subrequestCount);
-    logDebug(`Restored subrequest count: ${getSubrequestCount()}`);
     
-    // If we already have some data, we can return it immediately if we're at subrequest limit
-    if (previousState.completedShows.length > 0 && getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
-      console.log(`Returning ${previousState.completedShows.length} shows from previous state without additional scraping (subrequest limit reached)`);
+    // Early return if we have shows and we're at the limit - this makes the function exit quickly
+    if (previousState.completedShows.length > 0 && 
+        Date.now() - startTime > SCRAPER_CONFIG.MAX_WAIT_TIME / 2) {
+      console.log(`Returning ${previousState.completedShows.length} shows from previous state (CPU time limit approaching)`);
       return previousState.completedShows;
     }
   } else {
@@ -92,24 +122,11 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
     resetSubrequestCount();
   }
   
-  // Log the current subrequest count for debugging
-  logDebug('Starting/resuming scrape with subrequest count:', getSubrequestCount());
-  
   const today = getCurrentDateString();
   logDebug('Starting/resuming scrape from date:', today);
   
   try {
-    // Initialize Supabase if needed
-    if (!SCRAPER_CONFIG.STORAGE_MODE) {
-      const supabaseUrl = env?.SUPABASE_URL || process.env.SUPABASE_URL;
-      const supabaseKey = env?.SUPABASE_KEY || process.env.SUPABASE_KEY;
-      
-      if (!supabaseUrl || !supabaseKey) {
-        throw new Error('Missing Supabase credentials');
-      }
-      
-      initSupabase({ SUPABASE_URL: supabaseUrl, SUPABASE_KEY: supabaseKey });
-    }
+    // Skip Supabase initialization in this cycle to save CPU time
     
     // Use dates from previous state or find new ones
     let allDatesToScrape: string[];
@@ -117,13 +134,39 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
       allDatesToScrape = previousState.allDatesToScrape;
       logDebug(`Using ${allDatesToScrape.length} dates from previous state`);
     } else {
-      // Phase 1: Find dates with events in current month only
+      // Phase 1: Find dates with events
       allDatesToScrape = await findDatesWithEvents(today);
       logDebug(`Found ${allDatesToScrape.length} dates with events`);
+      
+      // Save state immediately after finding dates to preserve this work
+      if (kvStorage && allDatesToScrape.length > 0) {
+        const initialState: ScrapingState = {
+          lastUpdated: Date.now(),
+          allDatesToScrape,
+          processedDates: [],
+          pendingJobs: allDatesToScrape.map(day => ({ 
+            url: `${SCRAPER_CONFIG.BASE_URL}/afisha/${day}`, 
+            day 
+          })),
+          completedShows: [],
+          subrequestCount: getSubrequestCount()
+        };
+        await kvStorage.saveScraperState(initialState);
+        logDebug('Saved initial state with dates and pending jobs');
+        
+        // Return early after finding dates to avoid CPU timeout
+        return [];
+      }
     }
     
     if (allDatesToScrape.length === 0) {
       logDebug('No dates with events found');
+      return previousState?.completedShows || [];
+    }
+
+    // Check if we're approaching CPU time limit
+    if (Date.now() - startTime > SCRAPER_CONFIG.MAX_WAIT_TIME / 2) {
+      logDebug('CPU time limit approaching, saving progress and exiting');
       return previousState?.completedShows || [];
     }
 
@@ -134,158 +177,84 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
       logDebug(`Filtered to ${datesToProcess.length} unprocessed dates (${previousState.processedDates.length} already processed)`);
     }
     
-    // Phase 2: Process only a chunk of dates to respect subrequest limits
-    // Further limit the chunk size for Cloudflare Workers
+    // Process only 1 date per execution to stay within CPU limits
     const datesToScrape = datesToProcess.slice(0, SCRAPER_CONFIG.CHUNK_SIZE);
     logDebug(`Processing ${datesToScrape.length} dates out of ${datesToProcess.length} remaining (${allDatesToScrape.length} total)`);
 
-    // Phase 3: Process shows using job queue with timeouts
-    const jobQueue = new JobQueue(SCRAPER_CONFIG.MAX_CONCURRENT_JOBS);
+    if (datesToScrape.length === 0) {
+      logDebug('No dates left to scrape');
+      return previousState?.completedShows || [];
+    }
     
-    // Add pending jobs from previous state first
-    if (previousState?.pendingJobs && previousState.pendingJobs.length > 0) {
-      logDebug(`Adding ${previousState.pendingJobs.length} pending jobs from previous state`);
-      previousState.pendingJobs.forEach(job => {
-        if (getSubrequestCount() < SCRAPER_CONFIG.MAX_SUBREQUESTS) {
-          jobQueue.add(job);
-        }
-      });
-    } else {
-      // Add priority to closer dates (process today and tomorrow first)
-      const priorityDays = datesToScrape.slice(0, 2); // Today and tomorrow
-      const regularDays = datesToScrape.slice(2);
-      
-      for (const day of priorityDays) {
-        if (getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
-          console.log('Stopping adding priority jobs due to subrequest limit');
-          break;
-        }
-        
-        const currentUrl = `${SCRAPER_CONFIG.BASE_URL}/afisha/${day}`;
-        jobQueue.add({ url: currentUrl, day });
-      }
-      
-      // Then add regular days
-      for (const day of regularDays) {
-        if (getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
-          console.log('Subrequest limit reached while adding regular jobs. Halting further additions.');
-          break;
-        }
-        
-        const currentUrl = `${SCRAPER_CONFIG.BASE_URL}/afisha/${day}`;
-        jobQueue.add({ url: currentUrl, day });
-      }
+    // Check if we're approaching CPU time limit again
+    if (Date.now() - startTime > SCRAPER_CONFIG.MAX_WAIT_TIME * 0.75) {
+      logDebug('CPU time limit approaching, saving progress and exiting');
+      return previousState?.completedShows || [];
     }
 
-    // Set a timeout to avoid hanging the worker
-    let timeoutReached = false;
+    // Process a single date directly without using the job queue to reduce overhead
+    const day = datesToScrape[0];
+    const url = `${SCRAPER_CONFIG.BASE_URL}/afisha/${day}`;
     
-    // Track processed dates
-    const processedDates = previousState?.processedDates || [];
-
-    // Override the job processor to pass KV storage to scrapeDay
-    jobQueue.setJobProcessor(async (job) => {
-      return scrapeDay(job.url, job.day, kvStorage);
-    });
-
-    const timeoutPromise = new Promise<Show[]>((resolve) => {
-      // Use a very short timeout due to Cloudflare's 10ms CPU time limit
-      setTimeout(() => {
-        timeoutReached = true;
-        console.log('CPU time limit approaching, saving state for next execution');
-        
-        // Always save state on timeout to ensure incremental progress
-        if (kvStorage) {
-          // Get the remaining jobs from the queue
-          const pendingJobs = jobQueue.getPendingJobs();
-          const partialResults = jobQueue.getResults();
-          
-          // Combine completed shows from previous state with new ones
-          const allCompletedShows = [...(previousState?.completedShows || []), ...partialResults];
-          
-          // Create state to save
-          const state: ScrapingState = {
-            lastUpdated: Date.now(),
-            allDatesToScrape,
-            processedDates,
-            pendingJobs,
-            completedShows: allCompletedShows,
-            subrequestCount: getSubrequestCount()
-          };
-          
-          // Save state immediately but don't wait for it to complete
-          kvStorage.saveScraperState(state)
-            .then(() => logDebug('Successfully saved state before timeout'))
-            .catch(err => console.error('Failed to save state on timeout:', err));
-        }
-        
-        // Return whatever we have so far
-        resolve(previousState?.completedShows || []);
-      }, SCRAPER_CONFIG.MAX_WAIT_TIME);
-    });
-
-    // Wait for job completion or timeout
-    const newCompletedShows = await Promise.race([
-      jobQueue.waitForCompletion(),
-      timeoutPromise
-    ]);
+    logDebug(`Directly processing date: ${day}`);
+    const shows = await scrapeDay(url, day, kvStorage);
+    logDebug(`Found ${shows.length} shows for ${day}`);
     
-    // Track which days were successfully processed
-    jobQueue.getCompletedJobs().forEach(job => {
-      if (!processedDates.includes(job.day)) {
-        processedDates.push(job.day);
-      }
-    });
-
-    // If timeout was reached, merge partial results with completed jobs
-    const allNewShows = timeoutReached
-      ? [...newCompletedShows, ...jobQueue.getResults()]
-      : newCompletedShows;
-      
-    // Combine with previous results if available
-    const allShows = [...(previousState?.completedShows || []), ...allNewShows];
+    // Mark the date as processed
+    const processedDates = [...(previousState?.processedDates || []), day];
     
-    // Check if we reached the end of the current scraping cycle successfully
-    const isComplete = !timeoutReached && 
-                      getSubrequestCount() < SCRAPER_CONFIG.MAX_SUBREQUESTS &&
-                      jobQueue.getPendingJobs().length === 0 &&
-                      processedDates.length === allDatesToScrape.length;
-                      
-    // Save or clear state based on completion status
+    // Update the pending jobs list for the next execution
+    const pendingJobs = previousState?.pendingJobs || allDatesToScrape.map(d => ({ 
+      url: `${SCRAPER_CONFIG.BASE_URL}/afisha/${d}`, 
+      day: d 
+    }));
+    
+    // Remove the job we just processed
+    const updatedPendingJobs = pendingJobs.filter(job => job.day !== day);
+    
+    // Combine shows with previous results
+    const allCompletedShows = [...(previousState?.completedShows || []), ...shows];
+    
+    // Check if we're done scraping all dates
+    const isComplete = datesToProcess.length <= 1;
+    
+    // Always save state to continue progress incrementally
     if (kvStorage) {
-      if (isComplete) {
+      // Save state for incremental processing
+      const state: ScrapingState = {
+        lastUpdated: Date.now(),
+        allDatesToScrape,
+        processedDates,
+        pendingJobs: updatedPendingJobs,
+        completedShows: allCompletedShows,
+        subrequestCount: getSubrequestCount()
+      };
+      
+      await kvStorage.saveScraperState(state);
+      logDebug('Saved state for future resumption');
+      
+      // Clean up if we're done
+      if (isComplete && allCompletedShows.length > 0) {
         // Count shows in KV and compare with total scraped shows
         const kvShowCount = await kvStorage.getShowCount();
-        const totalShowCount = allShows.length;
+        const totalShowCount = allCompletedShows.length;
         
         logDebug(`Completion check: KV shows: ${kvShowCount}, Total scraped: ${totalShowCount}`);
         
         // If we have all shows, clean KV storage
-        if (kvShowCount >= totalShowCount) {
+        if (kvShowCount >= totalShowCount && totalShowCount > 0) {
           logDebug('All shows have been scraped successfully, clearing KV storage');
           await kvStorage.clearAllShows();
         }
         
-        // Clear the scraper state since we're done
+        // Only clear the state if we actually have scraped data
         logDebug('Scraping completed successfully, clearing saved state');
         await kvStorage.clearScraperState();
-      } else if (timeoutReached || getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
-        // Save current state if we hit timeout or subrequest limit
-        logDebug('Saving state for future resumption');
-        const state: ScrapingState = {
-          lastUpdated: Date.now(),
-          allDatesToScrape,
-          processedDates,
-          pendingJobs: jobQueue.getPendingJobs(),
-          completedShows: allShows,
-          subrequestCount: getSubrequestCount()
-        };
-        await kvStorage.saveScraperState(state);
       }
     }
     
-    logDebug(`Found ${allShows.length} shows in total. Subrequests: ${getSubrequestCount()}`);
-    return allShows;
+    logDebug(`Execution took ${Date.now() - startTime}ms`);
+    return allCompletedShows;
   } catch (error) {
     console.error('Error during scraping:', error);
     if (previousState?.completedShows) {
