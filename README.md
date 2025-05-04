@@ -1,6 +1,6 @@
 # Loop Tickets Bot
 
-A Telegram bot that tracks ticket availability for shows and notifies users when new dates become available.
+A Telegram bot that tracks ticket availability for shows.
 
 ## Setup
 
@@ -23,14 +23,10 @@ create table shows (
   id text primary key,
   title text not null,
   url text not null,
-  dates text[] not null
-);
-
-create table subscriptions (
-  user_id bigint not null,
-  show_id text not null references shows(id),
-  chat_id bigint not null,
-  primary key (user_id, show_id)
+  date text not null,
+  imageUrl text,
+  ticketUrl text,
+  soldOut boolean default false
 );
 ```
 

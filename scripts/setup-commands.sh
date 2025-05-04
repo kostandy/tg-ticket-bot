@@ -20,14 +20,6 @@ curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setMyCommands" \
          {
            "command": "upcoming",
            "description": "Показати вистави з доступними квитками"
-         },
-         {
-           "command": "subscribe",
-           "description": "Підписатися на сповіщення про квитки. Використання: /subscribe <ID вистави>"
-         },
-         {
-           "command": "unsubscribe",
-           "description": "Відписатися від сповіщень про квитки. Використання: /unsubscribe <ID вистави>"
          }
        ]
      }' 

@@ -1,10 +1,7 @@
-import { handleStart, handleSubscribe, handlePosters, handleUnsubscribe, handleUpcoming } from './bot.js';
+import { handleStart, handlePosters, handleUpcoming } from './bot.js';
 import { scrapeShows } from './scraper.js';
 import { initSupabase, getSupabase } from './db.js';
 import type { Env, TelegramUpdate } from './types.js';
-
-const subscribeRegex = /\/subscribe (\d+)/;
-const unsubscribeRegex = /\/unsubscribe (\d+)/;
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -28,14 +25,8 @@ export default {
 
       if (msg.text === '/start') {
         await handleStart(msg);
-      } else if (msg.text?.startsWith('/subscribe')) {
-        const match = subscribeRegex.exec(msg.text);
-        await handleSubscribe(msg, match);
       } else if (msg.text === '/posters') {
         await handlePosters(msg);
-      } else if (msg.text?.startsWith('/unsubscribe')) {
-        const match = unsubscribeRegex.exec(msg.text);
-        await handleUnsubscribe(msg, match);
       } else if (msg.text === '/upcoming') {
         await handleUpcoming(msg);
       }
@@ -76,15 +67,15 @@ export default {
         } else {
           console.log('Successfully inserted show:', insertData);
         }
-      } else if (JSON.stringify(existingShow.dates) !== JSON.stringify(show.dates)) {
-        console.log('Updating show dates:', {
+      } else if (existingShow.date !== show.date) {
+        console.log('Updating show date:', {
           showId: existingShow.id,
-          oldDates: existingShow.dates,
-          newDates: show.dates
+          oldDate: existingShow.date,
+          newDate: show.date
         });
         const { error: updateError, data: updateData } = await supabase
           .from('shows')
-          .update({ dates: show.dates })
+          .update({ date: show.date })
           .eq('id', show.id);
         if (updateError) {
           console.error('Failed to update show:', updateError);

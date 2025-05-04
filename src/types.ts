@@ -8,21 +8,9 @@ export interface Show {
   soldOut: boolean;
 }
 
-export interface UserSubscription {
-  id: string;
-  userId: number;
-  showId: string;
-  chatId: number;
-}
-
 export interface Database {
   public: {
     Tables: {
-      subscriptions: {
-        Row: UserSubscription;
-        Insert: Omit<UserSubscription, 'id'>;
-        Update: Partial<UserSubscription>;
-      };
       shows: {
         Row: Show;
         Insert: Omit<Show, 'id'>;
@@ -118,10 +106,4 @@ export interface ShowRepository {
   findAvailable(): Promise<Show[]>;
   save(show: Show): Promise<void>;
   update(show: Show): Promise<void>;
-}
-
-export interface SubscriptionRepository {
-  subscribe(chatId: number, showId: string): Promise<void>;
-  unsubscribe(chatId: number, showId: string): Promise<void>;
-  findByShowId(showId: string): Promise<{ chatId: number }[]>;
 } 
