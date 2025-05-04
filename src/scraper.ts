@@ -49,6 +49,14 @@ if (!STORAGE_MODE) {
 // Keep track of subrequests to respect Cloudflare limits
 let subrequestCount = 0;
 
+// Global rate-limiting mechanism
+const rateLimit = async () => {
+  if (subrequestCount >= MAX_SUBREQUESTS) {
+    throw new Error('Subrequest limit reached');
+  }
+  subrequestCount++;
+};
+
 // Create a hash ID from URL and datetime
 const createShowId = (url: string, datetime: Date | string): string => {
   // Use full ISO string for Date objects, otherwise use the provided string
@@ -172,10 +180,7 @@ const MAX_CACHE_ENTRIES = 20;
 let cacheEntryCount = 0;
 
 const fetchWithRetry = async (url: string, options: Record<string, unknown> = {}): Promise<Response> => {
-  // Check if we've hit the subrequest limit
-  if (subrequestCount >= MAX_SUBREQUESTS) {
-    throw new Error('Subrequest limit reached');
-  }
+  await rateLimit();
   
   // Check cache first
   if (url in pageCache) {
@@ -327,7 +332,10 @@ class JobQueue {
   }
 
   private async processNext() {
-    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0 || subrequestCount >= MAX_SUBREQUESTS) {
+      if (subrequestCount >= MAX_SUBREQUESTS) {
+        console.error('Stopping job processing due to subrequest limit');
+      }
       return;
     }
 
@@ -575,11 +583,15 @@ class JobQueue {
     console.log(`JobQueue finished with ${this.results.length} shows from ${initialJobCount} jobs`);
     return this.results;
   }
+
+  getResults(): Show[] {
+    return this.results;
+  }
 }
 
 export const scrapeShows = async (): Promise<Show[]> => {
-  // Reset subrequest count on each invocation
-  subrequestCount = 0;
+  // Log the current subrequest count for debugging
+  logDebug('Starting scrape with subrequest count:', subrequestCount);
   
   const today = new Date().toISOString().slice(0, 10);
   logDebug('Starting scrape from date:', today);
@@ -604,7 +616,7 @@ export const scrapeShows = async (): Promise<Show[]> => {
     const priorityDays = datesToScrape.slice(0, 2); // Today and tomorrow
     const regularDays = datesToScrape.slice(2);
     
-    // Add priority days first
+        console.error('Subrequest limit reached while adding priority jobs. Halting further additions.');
     for (const day of priorityDays) {
       if (subrequestCount >= MAX_SUBREQUESTS) {
         console.error('Stopping adding priority jobs due to subrequest limit');
@@ -618,7 +630,7 @@ export const scrapeShows = async (): Promise<Show[]> => {
     // Then add regular days
     for (const day of regularDays) {
       if (subrequestCount >= MAX_SUBREQUESTS) {
-        console.error('Stopping adding jobs due to subrequest limit');
+        console.error('Subrequest limit reached while adding regular jobs. Halting further additions.');
         break;
       }
       
@@ -627,19 +639,27 @@ export const scrapeShows = async (): Promise<Show[]> => {
     }
 
     // Set a timeout to avoid hanging the worker
+    let timeoutReached = false;
+
     const timeoutPromise = new Promise<Show[]>((resolve) => {
       // Give the scraper a reasonable time to complete within the worker's CPU time
       setTimeout(() => {
+        timeoutReached = true;
         console.error('Scraper timeout reached, returning partial results');
         resolve([]);
       }, 9000); // Increased to 9 seconds to match the MAX_WAIT_TIME
     });
 
-    // Race the job completion against the timeout
-    const allShows = await Promise.race([
+    // Wait for job completion or timeout
+    const completedShows = await Promise.race([
       jobQueue.waitForCompletion(),
       timeoutPromise
     ]);
+
+    // If timeout was reached, merge partial results with completed jobs
+    const allShows = timeoutReached
+      ? [...completedShows, ...jobQueue.getResults()]
+      : completedShows;
     
     logDebug(`Found ${allShows.length} shows in ${datesToScrape.length} days. Total subrequests: ${subrequestCount}`);
     return allShows;
