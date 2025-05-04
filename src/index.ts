@@ -55,7 +55,11 @@ export default {
     initSupabase(env);
     
     // Initialize Telegram service for notifications
-    const telegram = new TelegramService(env.TELEGRAM_BOT_TOKEN);
+    if (!env.TELEGRAM_BOT_TOKEN) {
+      console.error('Missing Telegram bot token, will not send notifications');
+    }
+    
+    const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramService(env.TELEGRAM_BOT_TOKEN) : null;
     const showFormatter = new DefaultShowFormatter();
 
     // First, fetch only IDs of existing shows to minimize payload
@@ -80,10 +84,12 @@ export default {
     const newShows: Show[] = [];
     const shows = await scrapeShows();
     
+    console.log(`Scraped ${shows.length} total shows`);
+    
     for (const show of shows) {
       // Check if show already exists by ID
       if (!existingIdMap.has(show.id)) {
-        console.log('New show detected:', show.title, show.date);
+        console.log(`New show detected: "${show.title}" on ${show.date}`);
         newShows.push(show);
         
         // Insert into database
@@ -103,23 +109,31 @@ export default {
     }
     
     // Send notifications for new shows
-    if (newShows.length > 0) {
-      console.log(`Sending notifications for ${newShows.length} new shows`);
+    if (newShows.length > 0 && telegram) {
+      console.log(`Sending notifications for ${newShows.length} new shows to channel ${CHANNEL_ID}`);
       
-      // Send message to channel about new shows
-      for (const show of newShows) {
-        try {
-          const message = showFormatter.format(show);
-          message.text = `🔔 *New Show Added!*\n\n${message.text}`;
-          
-          await telegram.sendMessage(CHANNEL_ID, message);
-          
-          // Add delay between messages to avoid rate limits
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (error) {
-          console.error('Failed to send notification for new show:', error);
+      try {
+        // Send message to channel about new shows
+        for (const show of newShows) {
+          try {
+            const message = showFormatter.format(show);
+            message.text = `🔔 *New Show Added!*\n\n${message.text}`;
+            
+            await telegram.sendMessage(CHANNEL_ID, message);
+            console.log(`Notification sent for show: "${show.title}"`);
+            
+            // Add delay between messages to avoid rate limits
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } catch (error) {
+            console.error(`Failed to send notification for show "${show.title}":`, error);
+            // Continue with other shows even if one fails
+          }
         }
+      } catch (error) {
+        console.error('Failed to process notifications:', error);
       }
+    } else if (newShows.length > 0) {
+      console.log(`Found ${newShows.length} new shows but no Telegram token available for notifications`);
     } else {
       console.log('No new shows found');
     }

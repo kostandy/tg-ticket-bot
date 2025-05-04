@@ -84,7 +84,7 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI, date: string): Show[] => {
     
     if (title && url) {
       const id = createShowId(url, date);
-      shows.push({
+      const show: Show = {
         id,
         title,
         url,
@@ -92,7 +92,11 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI, date: string): Show[] => {
         imageUrl,
         ticketUrl,
         soldOut
-      });
+      };
+      
+      // Calculate and add content hash right away
+      show.contentHash = calculateShowContentHash(show);
+      shows.push(show);
     }
   });
   
@@ -273,18 +277,19 @@ class JobQueue {
       const $ = cheerio.load(html);
       
       if (hasNoEvents($)) {
+        console.log(`No events found for ${job.day}`);
         return [];
       }
       
       const dayShows = await scrapeDay(job.url, job.day);
+      console.log(`Found ${dayShows.length} shows for ${job.day}`);
+      
       const existingFileName = await this.findExistingFile(job.day);
       const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
       const posterMap = new Map<string, Show>();
       
       // Store shows by their new hash-based ID
       for (const show of storedShows) {
-        // Ensure existing stored shows also have query params stripped
-        show.imageUrl = stripQueryParams(show.imageUrl);
         posterMap.set(show.id, show);
       }
       
@@ -328,6 +333,10 @@ class JobQueue {
         const existingShowMap = new Map<string, { id: string; contentHash?: string }>();
         existingShows?.forEach(show => existingShowMap.set(show.id, show));
         
+        let newCount = 0;
+        let updatedCount = 0;
+        let unchangedCount = 0;
+        
         for (const show of mergedShows) {
           const existingShow = existingShowMap.get(show.id);
           
@@ -336,7 +345,7 @@ class JobQueue {
               // This is a new show
               const { error: insertError } = await supabase.from('shows').insert(show);
               if (insertError) throw insertError;
-              console.log('Inserted new show:', show.title);
+              newCount++;
             } else if (existingShow.contentHash !== show.contentHash) {
               // Show exists but content has changed
               const { error: updateError } = await supabase
@@ -351,16 +360,18 @@ class JobQueue {
                 })
                 .eq('id', show.id);
               if (updateError) throw updateError;
-              console.log('Updated show:', show.title);
+              updatedCount++;
             } else {
               // Show exists and hasn't changed - no update needed
-              console.log('Show unchanged, skipping update:', show.title);
+              unchangedCount++;
             }
             await new Promise(resolve => setTimeout(resolve, 500));
           } catch (error) {
-            console.error(`Error saving show ${show.title}:`, error);
+            console.error(`Error saving show ${show.id}:`, error);
           }
         }
+        
+        console.log(`Day ${job.day} processed: ${newCount} new, ${updatedCount} updated, ${unchangedCount} unchanged shows`);
       }
       
       return mergedShows;
