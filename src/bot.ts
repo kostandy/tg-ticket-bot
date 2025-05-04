@@ -104,7 +104,7 @@ const handleAdminStats = async (msg: TelegramMessage) => {
       .from('shows')
       .select('*', { count: 'exact', head: true })
       .eq('soldOut', false)
-      .gt('date', todayStr);
+      .gt('datetime', todayStr);
     
     if (upcomingError) {
       throw new Error(`Error getting upcoming show count: ${upcomingError.message}`);
@@ -169,7 +169,7 @@ const handleAdminClearOld = async (msg: TelegramMessage) => {
     const { error, count } = await supabase
       .from('shows')
       .delete({ count: 'exact' })
-      .lt('date', todayStr)
+      .lt('datetime', todayStr)
       .select();
     
     if (error) {
@@ -217,7 +217,7 @@ export const handlePosters = async (msg: TelegramMessage) => {
         return a.soldOut ? 1 : -1;
       }
       // Then sort by date
-      return new Date(a.date).getTime() - new Date(b.date).getTime();
+      return new Date(a.datetime).getTime() - new Date(b.datetime).getTime();
     });
 
     // Store the shows for this user
@@ -274,11 +274,11 @@ const sendShowsPage = async (chatId: number, page: number) => {
   const pageShows = shows.slice(startIdx, endIdx);
   
   const pageText = pageShows.map(show => {
-    const formattedDate = show.date instanceof Date 
-      ? show.date.toLocaleDateString('uk-UA')
-      : typeof show.date === 'string' 
-        ? show.date 
-        : new Date(show.date).toLocaleDateString('uk-UA');
+    const formattedDate = show.datetime instanceof Date 
+      ? show.datetime.toLocaleDateString('uk-UA')
+      : typeof show.datetime === 'string' 
+        ? show.datetime 
+        : new Date(show.datetime).toLocaleDateString('uk-UA');
     
     const dateDisplay = show.soldOut ? `${formattedDate} (Sold Out)` : formattedDate;
     return `*${show.title}*\nDate: ${dateDisplay}\n${show.soldOut ? '' : `🎫 [Купити квитки](https://molodyytheatre.com${show.ticketUrl})`}`;
@@ -313,11 +313,11 @@ const updateShowsPage = async (chatId: number, messageId: number, page: number) 
   const pageShows = shows.slice(startIdx, endIdx);
   
   const pageText = pageShows.map(show => {
-    const formattedDate = show.date instanceof Date 
-      ? show.date.toLocaleDateString('uk-UA')
-      : typeof show.date === 'string' 
-        ? show.date 
-        : new Date(show.date).toLocaleDateString('uk-UA');
+    const formattedDate = show.datetime instanceof Date 
+      ? show.datetime.toLocaleDateString('uk-UA')
+      : typeof show.datetime === 'string' 
+        ? show.datetime 
+        : new Date(show.datetime).toLocaleDateString('uk-UA');
         
     const dateDisplay = show.soldOut ? `${formattedDate} (Sold Out)` : formattedDate;
     return `*${show.title}*\nDate: ${dateDisplay}\n${show.soldOut ? '' : `🎫 [Купити квитки](https://molodyytheatre.com${show.ticketUrl})`}`;
@@ -347,7 +347,7 @@ export const handleUpcoming = async (msg: TelegramMessage) => {
 
     // Sort by date
     const sortedShows = [...shows].sort((a, b) => 
-      new Date(a.date).getTime() - new Date(b.date).getTime()
+      new Date(a.datetime).getTime() - new Date(b.datetime).getTime()
     );
 
     // Store the shows for this user

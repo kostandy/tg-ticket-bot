@@ -91,7 +91,7 @@ export default {
       const { data: existingShowIds, error: selectError } = await supabase
         .from('shows')
         .select('id')
-        .order('date', { ascending: false });
+        .order('datetime', { ascending: false });
       
       if (selectError) {
         console.error('Failed to fetch existing show IDs:', selectError);
@@ -117,7 +117,7 @@ export default {
       for (const show of shows) {
         // Check if show already exists by ID
         if (!existingIdMap.has(show.id)) {
-          logDebug(`New show detected: "${show.title}" on ${show.date}`);
+          logDebug(`New show detected: "${show.title}" on ${show.datetime}`);
           newShows.push(show);
           showsToInsert.push(show);
         }

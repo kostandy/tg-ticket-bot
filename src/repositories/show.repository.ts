@@ -9,7 +9,7 @@ export class SupabaseShowRepository implements ShowRepository {
       throw new Error('Failed to fetch shows');
     }
     
-    // Convert date strings to Date objects
+    // Convert datetime strings to Date objects
     return (data || []).map(this.processShowDates);
   }
 
@@ -18,14 +18,14 @@ export class SupabaseShowRepository implements ShowRepository {
       .from('shows')
       .select()
       .eq('soldOut', false)
-      .order('date', { ascending: true });
+      .order('datetime', { ascending: true });
 
     if (error) {
       console.error('Failed to fetch available shows:', error);
       throw new Error('Failed to fetch available shows');
     }
     
-    // Convert date strings to Date objects
+    // Convert datetime strings to Date objects
     return (data || []).map(this.processShowDates);
   }
 
@@ -55,23 +55,23 @@ export class SupabaseShowRepository implements ShowRepository {
     }
   }
   
-  // Helper method to convert database date strings to Date objects
-  private processShowDates(show: Omit<Show, 'date'> & { date: string | Date }): Show {
+  // Helper method to convert database datetime strings to Date objects
+  private processShowDates(show: Omit<Show, 'datetime'> & { datetime: string | Date }): Show {
     return {
       ...show,
-      date: show.date ? new Date(show.date) : new Date()
+      datetime: show.datetime ? new Date(show.datetime) : new Date()
     };
   }
   
   // Helper method to prepare show for database storage
-  private prepareShowForDb(show: Show): Omit<Show, 'date'> & { date: string } {
+  private prepareShowForDb(show: Show): Omit<Show, 'datetime'> & { datetime: string } {
     // Create a copy of the show object
-    const { date, ...rest } = show;
+    const { datetime, ...rest } = show;
     
-    // Convert Date to ISO date string for database storage
+    // Convert Date to ISO string for database storage
     return {
       ...rest,
-      date: date instanceof Date ? date.toISOString().split('T')[0] : new Date(date).toISOString().split('T')[0]
+      datetime: datetime instanceof Date ? datetime.toISOString() : new Date(datetime).toISOString()
     };
   }
 } 

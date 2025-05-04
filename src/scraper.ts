@@ -49,9 +49,10 @@ if (!STORAGE_MODE) {
 // Keep track of subrequests to respect Cloudflare limits
 let subrequestCount = 0;
 
-// Create a hash ID from URL and date
-const createShowId = (url: string, date: Date | string): string => {
-  const dateStr = date instanceof Date ? date.toISOString().split('T')[0] : date;
+// Create a hash ID from URL and datetime
+const createShowId = (url: string, datetime: Date | string): string => {
+  // Use full ISO string for Date objects, otherwise use the provided string
+  const dateStr = datetime instanceof Date ? datetime.toISOString() : datetime;
   return createHash('sha256').update(`${url}_${dateStr}`).digest('hex').slice(0, 16);
 };
 
@@ -61,7 +62,7 @@ const calculateShowContentHash = (show: Show): string => {
   // Exclude the ID itself since it's derived from URL and date
   const contentToHash = {
     title: show.title,
-    date: show.date,
+    datetime: show.datetime, // Use full ISO string with time information
     soldOut: show.soldOut,
     ticketUrl: show.ticketUrl
   };
@@ -79,6 +80,51 @@ const stripQueryParams = (url: string): string => {
   }
 };
 
+// Map of Ukrainian month names to their numeric values
+const UKRAINIAN_MONTHS: Record<string, number> = {
+  'січня': 0,     // January
+  'лютого': 1,    // February
+  'березня': 2,   // March
+  'квітня': 3,    // April
+  'травня': 4,    // May
+  'червня': 5,    // June
+  'липня': 6,     // July
+  'серпня': 7,    // August
+  'вересня': 8,   // September
+  'жовтня': 9,    // October
+  'листопада': 10, // November
+  'грудня': 11     // December
+};
+
+// Extract date and time from the HTML structure and convert to Date object
+// @ts-expect-error - Cheerio type definition issues
+const extractDateTime = ($el: cheerio.Cheerio, dateString: string): Date => {
+  const timeElement = $el.find('.views-field-field-time .field-content');
+  
+  // Extract components from spans with classes t1, t2, and t3
+  const day = timeElement.find('.t1').text().trim();
+  const monthWeekday = timeElement.find('.t2').text().trim();
+  const time = timeElement.find('.t3').text().trim();
+  
+  // Split the month and weekday if available (format: "червня, середа")
+  const [monthName = ''] = monthWeekday.split(',').map((part: string) => part.trim());
+  
+  // Parse time (expected format: "18:00")
+  const [hours = '0', minutes = '0'] = time.split(':').map((num: string) => parseInt(num, 10));
+  
+  // Get the current year from the dateString (which is in YYYY-MM-DD format)
+  const year = parseInt(dateString.substring(0, 4), 10);
+  
+  // Get the month index (0-11) from the Ukrainian month name
+  const monthIndex = UKRAINIAN_MONTHS[monthName.toLowerCase()] || 0;
+  
+  // Create a date object in local time
+  const localDate = new Date(year, monthIndex, parseInt(day, 10), hours, minutes);
+  
+  // Convert to UTC
+  return localDate;
+};
+
 // Memory-efficient HTML parsing - use null selectors for unwanted elements
 const parseShowsFromHtml = ($: cheerio.CheerioAPI, date: string): Show[] => {
   const shows: Show[] = [];
@@ -92,15 +138,17 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI, date: string): Show[] => {
     const ticketUrl = $el.find('.views-field-nothing a').attr('href') || '';
     const soldOut = $el.find('.views-field-field-label .field-content').text().trim().toLowerCase() === 'квитки продано';
     
+    // Extract date and time information and convert to Date object
+    const dateTime = extractDateTime($el, date);
+    
     if (title && url) {
-      // Parse date string to Date object
-      const dateObj = new Date(date);
-      const id = createShowId(url, dateObj);
+      // Use the full datetime for ID creation
+      const id = createShowId(url, dateTime);
       const show: Show = {
         id,
         title,
         url,
-        date: dateObj,
+        datetime: dateTime,
         imageUrl,
         ticketUrl,
         soldOut
