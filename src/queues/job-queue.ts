@@ -10,17 +10,26 @@ export interface Job {
   day: string;
 }
 
+// Define a type for the job processor function
+export type JobProcessor = (job: Job) => Promise<Show[]>;
+
 export class JobQueue {
   private queue: Job[] = [];
   private running = 0;
   private results: Show[] = [];
   private completedJobs: Job[] = [];
+  private customJobProcessor: JobProcessor | null = null;
 
   constructor(private maxConcurrent: number) {}
 
   add(job: Job) {
     this.queue.push(job);
     this.processNext();
+  }
+
+  // Set a custom job processor function
+  setJobProcessor(processor: JobProcessor) {
+    this.customJobProcessor = processor;
   }
 
   private async processNext() {
@@ -36,7 +45,11 @@ export class JobQueue {
     this.queue = this.queue.slice(1);
     
     try {
-      const shows = await this.processJob(job);
+      // Use custom processor if available, otherwise use default
+      const shows = this.customJobProcessor 
+        ? await this.customJobProcessor(job)
+        : await this.processJob(job);
+      
       this.results.push(...shows);
       // Track completed jobs
       this.completedJobs.push(job);

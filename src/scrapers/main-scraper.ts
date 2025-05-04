@@ -10,7 +10,7 @@ import { initSupabase } from '../db.js';
 import { KVStorage, type ScrapingState } from '../storage/kv-storage.js';
 
 // Scrape a single day's shows
-export const scrapeDay = async (url: string, day: string): Promise<Show[]> => {
+export const scrapeDay = async (url: string, day: string, kvStorage?: KVStorage | null): Promise<Show[]> => {
   logDebug(`Scraping day from ${url}`);
   try {
     const response = await fetchWithRetry(url);
@@ -31,7 +31,28 @@ export const scrapeDay = async (url: string, day: string): Promise<Show[]> => {
     }
     
     // Parse with minimal DOM manipulation to save CPU time
-    return parseShowsFromHtml($, day);
+    const parsedShows = parseShowsFromHtml($, day);
+    
+    // If KV storage is available, filter out already scraped shows
+    if (kvStorage) {
+      const showsToProcess = [];
+      
+      for (const show of parsedShows) {
+        const exists = await kvStorage.showExists(show.id);
+        if (!exists) {
+          // Save the show to KV immediately
+          await kvStorage.saveShow(show);
+          showsToProcess.push(show);
+        } else {
+          logDebug(`Skipping already processed show: ${show.id}`);
+        }
+      }
+      
+      logDebug(`Found ${parsedShows.length} shows, processed ${showsToProcess.length} new ones`);
+      return showsToProcess;
+    }
+    
+    return parsedShows;
   } catch (error) {
     console.error(`Error scraping day ${url}:`, error);
     return [];
@@ -162,6 +183,11 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
     // Track processed dates
     const processedDates = previousState?.processedDates || [];
 
+    // Override the job processor to pass KV storage to scrapeDay
+    jobQueue.setJobProcessor(async (job) => {
+      return scrapeDay(job.url, job.day, kvStorage);
+    });
+
     const timeoutPromise = new Promise<Show[]>((resolve) => {
       // Use a very short timeout due to Cloudflare's 10ms CPU time limit
       setTimeout(() => {
@@ -222,12 +248,25 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
     // Check if we reached the end of the current scraping cycle successfully
     const isComplete = !timeoutReached && 
                       getSubrequestCount() < SCRAPER_CONFIG.MAX_SUBREQUESTS &&
-                      jobQueue.getPendingJobs().length === 0;
+                      jobQueue.getPendingJobs().length === 0 &&
+                      processedDates.length === allDatesToScrape.length;
                       
     // Save or clear state based on completion status
     if (kvStorage) {
       if (isComplete) {
-        // If scraping completed successfully, clear the state
+        // Count shows in KV and compare with total scraped shows
+        const kvShowCount = await kvStorage.getShowCount();
+        const totalShowCount = allShows.length;
+        
+        logDebug(`Completion check: KV shows: ${kvShowCount}, Total scraped: ${totalShowCount}`);
+        
+        // If we have all shows, clean KV storage
+        if (kvShowCount >= totalShowCount) {
+          logDebug('All shows have been scraped successfully, clearing KV storage');
+          await kvStorage.clearAllShows();
+        }
+        
+        // Clear the scraper state since we're done
         logDebug('Scraping completed successfully, clearing saved state');
         await kvStorage.clearScraperState();
       } else if (timeoutReached || getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
@@ -249,8 +288,10 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
     return allShows;
   } catch (error) {
     console.error('Error during scraping:', error);
-    // Return partial results from previous state if available
-    return previousState?.completedShows || [];
+    if (previousState?.completedShows) {
+      return previousState.completedShows;
+    }
+    return [];
   }
 };
 
