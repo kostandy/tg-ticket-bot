@@ -8,6 +8,14 @@ import { DefaultShowFormatter } from './services/show-formatter.js';
 // Channel ID for notifications
 const CHANNEL_ID = 2642067703;
 
+// Enable detailed logging only in development
+const IS_DEV = false; // Set to false in production
+const logDebug = (message: string, ...args: unknown[]) => {
+  if (IS_DEV) {
+    console.log(message, ...args);
+  }
+};
+
 export default {
   async fetch(request: Request, env: Env) {
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
@@ -16,126 +24,163 @@ export default {
     const secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
     if (secret !== env.TELEGRAM_BOT_SECRET) return new Response('Unauthorized', { status: 403 });
 
-    initSupabase(env);
+    try {
+      initSupabase(env);
 
-    const url = new URL(request.url);
+      const url = new URL(request.url);
 
-    if (url.pathname === '/webhook') {
-      const update = await request.json() as TelegramUpdate;
-      
-      // Handle callback queries for pagination
-      if (update.callback_query) {
-        await handlePaginationCallback(update.callback_query);
+      if (url.pathname === '/webhook') {
+        const update = await request.json() as TelegramUpdate;
+        
+        // Handle callback queries for pagination
+        if (update.callback_query) {
+          await handlePaginationCallback(update.callback_query);
+          return new Response('OK');
+        }
+        
+        const msg = update.message;
+
+        if (!msg) {
+          return new Response('Invalid message', { status: 400 });
+        }
+
+        if (msg.text === '/start') {
+          await handleStart(msg);
+        } else if (msg.text === '/posters') {
+          await handlePosters(msg);
+        } else if (msg.text === '/upcoming') {
+          await handleUpcoming(msg);
+        }
+
         return new Response('OK');
       }
-      
-      const msg = update.message;
 
-      if (!msg) {
-        return new Response('Invalid message', { status: 400 });
-      }
-
-      if (msg.text === '/start') {
-        await handleStart(msg);
-      } else if (msg.text === '/posters') {
-        await handlePosters(msg);
-      } else if (msg.text === '/upcoming') {
-        await handleUpcoming(msg);
-      }
-
-      return new Response('OK');
+      return new Response('Not found', { status: 404 });
+    } catch (error) {
+      console.error('Error in fetch handler:', error);
+      return new Response('Internal server error', { status: 500 });
     }
-
-    return new Response('Not found', { status: 404 });
   },
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async scheduled(_: any, env: Env) {
-    console.log('Starting scheduled job');
-    initSupabase(env);
-    
-    // Initialize Telegram service for notifications
-    if (!env.TELEGRAM_BOT_TOKEN) {
-      console.error('Missing Telegram bot token, will not send notifications');
-    }
-    
-    const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramService(env.TELEGRAM_BOT_TOKEN) : null;
-    const showFormatter = new DefaultShowFormatter();
-
-    // First, fetch only IDs of existing shows to minimize payload
-    const supabase = getSupabase();
-    const { data: existingShowIds, error: selectError } = await supabase
-      .from('shows')
-      .select('id')
-      .order('date', { ascending: false });
-    
-    if (selectError) {
-      console.error('Failed to fetch existing show IDs:', selectError);
-      return;
-    }
-    
-    // Create map of existing IDs for fast lookup
-    const existingIdMap = new Map<string, boolean>();
-    existingShowIds?.forEach(item => existingIdMap.set(item.id, true));
-    
-    console.log(`Loaded ${existingIdMap.size} existing show IDs`);
-    
-    // Scrape shows
-    const newShows: Show[] = [];
-    const shows = await scrapeShows();
-    
-    console.log(`Scraped ${shows.length} total shows`);
-    
-    for (const show of shows) {
-      // Check if show already exists by ID
-      if (!existingIdMap.has(show.id)) {
-        console.log(`New show detected: "${show.title}" on ${show.date}`);
-        newShows.push(show);
-        
-        // Insert into database
-        const { error: insertError } = await supabase.from('shows').insert(show);
-        if (insertError) {
-          console.error('Failed to insert show:', insertError);
-          console.error('Insert error details:', {
-            code: insertError.code,
-            message: insertError.message,
-            details: insertError.details,
-            hint: insertError.hint
-          });
-        } else {
-          console.log('Successfully inserted new show:', show.title);
-        }
-      }
-    }
-    
-    // Send notifications for new shows
-    if (newShows.length > 0 && telegram) {
-      console.log(`Sending notifications for ${newShows.length} new shows to channel ${CHANNEL_ID}`);
+    try {
+      logDebug('Starting scheduled job');
+      initSupabase(env);
       
-      try {
-        // Send message to channel about new shows
-        for (const show of newShows) {
-          try {
-            const message = showFormatter.format(show);
-            message.text = `🔔 *New Show Added!*\n\n${message.text}`;
-            
-            await telegram.sendMessage(CHANNEL_ID, message);
-            console.log(`Notification sent for show: "${show.title}"`);
-            
-            // Add delay between messages to avoid rate limits
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          } catch (error) {
-            console.error(`Failed to send notification for show "${show.title}":`, error);
-            // Continue with other shows even if one fails
-          }
-        }
-      } catch (error) {
-        console.error('Failed to process notifications:', error);
+      // Initialize Telegram service for notifications
+      if (!env.TELEGRAM_BOT_TOKEN) {
+        console.error('Missing Telegram bot token, will not send notifications');
       }
-    } else if (newShows.length > 0) {
-      console.log(`Found ${newShows.length} new shows but no Telegram token available for notifications`);
-    } else {
-      console.log('No new shows found');
+      
+      const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramService(env.TELEGRAM_BOT_TOKEN) : null;
+      const showFormatter = new DefaultShowFormatter();
+
+      // First, fetch only IDs of existing shows to minimize payload
+      const supabase = getSupabase();
+      const { data: existingShowIds, error: selectError } = await supabase
+        .from('shows')
+        .select('id')
+        .order('date', { ascending: false });
+      
+      if (selectError) {
+        console.error('Failed to fetch existing show IDs:', selectError);
+        return;
+      }
+      
+      // Create map of existing IDs for fast lookup
+      const existingIdMap = new Map<string, boolean>();
+      existingShowIds?.forEach(item => existingIdMap.set(item.id, true));
+      
+      logDebug(`Loaded ${existingIdMap.size} existing show IDs`);
+      
+      // Scrape shows
+      const newShows: Show[] = [];
+      const shows = await scrapeShows();
+      
+      logDebug(`Scraped ${shows.length} total shows`);
+      
+      // Batch database operations to stay within subrequest limits
+      const BATCH_SIZE = 10;
+      const showsToInsert = [];
+      
+      for (const show of shows) {
+        // Check if show already exists by ID
+        if (!existingIdMap.has(show.id)) {
+          logDebug(`New show detected: "${show.title}" on ${show.date}`);
+          newShows.push(show);
+          showsToInsert.push(show);
+        }
+      }
+      
+      // Insert shows in batches
+      for (let i = 0; i < showsToInsert.length; i += BATCH_SIZE) {
+        const batch = showsToInsert.slice(i, i + BATCH_SIZE);
+        if (batch.length === 0) continue;
+        
+        try {
+          const { error: insertError } = await supabase.from('shows').insert(batch);
+          if (insertError) {
+            console.error('Failed to insert shows batch:', insertError);
+          } else {
+            logDebug(`Successfully inserted ${batch.length} shows`);
+          }
+          
+          // Avoid hitting rate limits
+          if (i + BATCH_SIZE < showsToInsert.length) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        } catch (error) {
+          console.error('Error inserting batch of shows:', error);
+        }
+      }
+      
+      // Send notifications for new shows
+      if (newShows.length > 0 && telegram) {
+        logDebug(`Sending notifications for ${newShows.length} new shows to channel ${CHANNEL_ID}`);
+        
+        try {
+          // Send message to channel about new shows, but limit to 5 to avoid excessive API calls
+          const maxNotifications = Math.min(newShows.length, 5);
+          for (let i = 0; i < maxNotifications; i++) {
+            try {
+              const show = newShows[i];
+              const message = showFormatter.format(show);
+              message.text = `🔔 *Нова вистава додана!*\n\n${message.text}`;
+              
+              await telegram.sendMessage(CHANNEL_ID, message);
+              logDebug(`Notification sent for show: "${show.title}"`);
+              
+              // Add delay between messages to avoid rate limits
+              if (i < maxNotifications - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+            } catch (error) {
+              console.error('Failed to send notification for show:', error);
+            }
+          }
+          
+          // If there are more shows than our limit, send a summary message
+          if (newShows.length > maxNotifications) {
+            try {
+              await telegram.sendMessage(CHANNEL_ID, {
+                text: `*Також додано ще ${newShows.length - maxNotifications} вистав(и). Використайте /posters щоб побачити всі.*`,
+                parse_mode: 'Markdown'
+              });
+            } catch (error) {
+              console.error('Failed to send summary notification:', error);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to process notifications:', error);
+        }
+      } else if (newShows.length > 0) {
+        logDebug(`Found ${newShows.length} new shows but no Telegram token available for notifications`);
+      } else {
+        logDebug('No new shows found');
+      }
+    } catch (error) {
+      console.error('Error in scheduled job:', error);
     }
   }
 }; 
