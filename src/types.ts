@@ -6,6 +6,7 @@ export interface Show {
   imageUrl: string;
   ticketUrl: string;
   soldOut: boolean;
+  contentHash?: string;
 }
 
 export interface Database {

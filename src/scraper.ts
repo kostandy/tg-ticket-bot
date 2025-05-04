@@ -46,6 +46,19 @@ const createShowId = (url: string, date: string): string => {
   return createHash('sha256').update(`${url}_${date}`).digest('hex').slice(0, 16);
 };
 
+// Calculate a content hash for a show to detect changes
+const calculateShowContentHash = (show: Show): string => {
+  // Create a hash based on the content that matters for change detection
+  // Exclude the ID itself since it's derived from URL and date
+  const contentToHash = {
+    title: show.title,
+    date: show.date,
+    soldOut: show.soldOut,
+    ticketUrl: show.ticketUrl
+  };
+  return createHash('sha256').update(JSON.stringify(contentToHash)).digest('hex').slice(0, 10);
+};
+
 // Helper function to strip query parameters from URLs
 const stripQueryParams = (url: string): string => {
   try {
@@ -277,6 +290,9 @@ class JobQueue {
       
       // Add new shows from current scrape
       for (const show of dayShows) {
+        // Add a content hash for change detection
+        const contentHash = calculateShowContentHash(show);
+        show.contentHash = contentHash;
         posterMap.set(show.id, show);
       }
       
@@ -296,21 +312,33 @@ class JobQueue {
         }
       } else {
         const supabase = getSupabase();
-        const { data: existingShows, error: selectError } = await supabase.from('shows').select();
+        
+        // Fetch only IDs and content hashes to minimize payload
+        const { data: existingShows, error: selectError } = await supabase
+          .from('shows')
+          .select('id, contentHash')
+          .in('id', mergedShows.map(show => show.id));
         
         if (selectError) {
           console.error('Failed to fetch existing shows:', selectError);
           return mergedShows;
         }
         
+        // Create a map for fast lookup
+        const existingShowMap = new Map<string, { id: string; contentHash?: string }>();
+        existingShows?.forEach(show => existingShowMap.set(show.id, show));
+        
         for (const show of mergedShows) {
-          const existingShow = existingShows?.find((s: { id: string }) => s.id === show.id);
+          const existingShow = existingShowMap.get(show.id);
+          
           try {
             if (!existingShow) {
+              // This is a new show
               const { error: insertError } = await supabase.from('shows').insert(show);
               if (insertError) throw insertError;
-              console.log('Inserted show:', show.title);
-            } else {
+              console.log('Inserted new show:', show.title);
+            } else if (existingShow.contentHash !== show.contentHash) {
+              // Show exists but content has changed
               const { error: updateError } = await supabase
                 .from('shows')
                 .update({ 
@@ -318,11 +346,15 @@ class JobQueue {
                   url: show.url,
                   imageUrl: show.imageUrl,
                   ticketUrl: show.ticketUrl,
-                  soldOut: show.soldOut
+                  soldOut: show.soldOut,
+                  contentHash: show.contentHash
                 })
                 .eq('id', show.id);
               if (updateError) throw updateError;
               console.log('Updated show:', show.title);
+            } else {
+              // Show exists and hasn't changed - no update needed
+              console.log('Show unchanged, skipping update:', show.title);
             }
             await new Promise(resolve => setTimeout(resolve, 500));
           } catch (error) {

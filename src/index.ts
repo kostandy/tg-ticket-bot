@@ -1,7 +1,12 @@
 import { handleStart, handlePosters, handleUpcoming, handlePaginationCallback } from './bot.js';
 import { scrapeShows } from './scraper.js';
 import { initSupabase, getSupabase } from './db.js';
-import type { Env, TelegramUpdate } from './types.js';
+import type { Env, TelegramUpdate, Show } from './types.js';
+import { TelegramService } from './services/telegram.js';
+import { DefaultShowFormatter } from './services/show-formatter.js';
+
+// Channel ID for notifications
+const CHANNEL_ID = 2642067703;
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -48,21 +53,41 @@ export default {
   async scheduled(_: any, env: Env) {
     console.log('Starting scheduled job');
     initSupabase(env);
+    
+    // Initialize Telegram service for notifications
+    const telegram = new TelegramService(env.TELEGRAM_BOT_TOKEN);
+    const showFormatter = new DefaultShowFormatter();
 
-    const shows = await scrapeShows();
+    // First, fetch only IDs of existing shows to minimize payload
     const supabase = getSupabase();
-    const { data: existingShows, error: selectError } = await supabase.from('shows').select();
+    const { data: existingShowIds, error: selectError } = await supabase
+      .from('shows')
+      .select('id')
+      .order('date', { ascending: false });
+    
     if (selectError) {
-      console.error('Failed to fetch existing shows:', selectError);
+      console.error('Failed to fetch existing show IDs:', selectError);
       return;
     }
-    console.log('Existing shows:', JSON.stringify(existingShows, null, 2));
-
+    
+    // Create map of existing IDs for fast lookup
+    const existingIdMap = new Map<string, boolean>();
+    existingShowIds?.forEach(item => existingIdMap.set(item.id, true));
+    
+    console.log(`Loaded ${existingIdMap.size} existing show IDs`);
+    
+    // Scrape shows
+    const newShows: Show[] = [];
+    const shows = await scrapeShows();
+    
     for (const show of shows) {
-      const existingShow = existingShows?.find((s) => s.title === show.title);
-      if (!existingShow) {
-        console.log('Inserting new show:', JSON.stringify(show, null, 2));
-        const { error: insertError, data: insertData } = await supabase.from('shows').insert(show);
+      // Check if show already exists by ID
+      if (!existingIdMap.has(show.id)) {
+        console.log('New show detected:', show.title, show.date);
+        newShows.push(show);
+        
+        // Insert into database
+        const { error: insertError } = await supabase.from('shows').insert(show);
         if (insertError) {
           console.error('Failed to insert show:', insertError);
           console.error('Insert error details:', {
@@ -72,30 +97,31 @@ export default {
             hint: insertError.hint
           });
         } else {
-          console.log('Successfully inserted show:', insertData);
-        }
-      } else if (existingShow.date !== show.date) {
-        console.log('Updating show date:', {
-          showId: existingShow.id,
-          oldDate: existingShow.date,
-          newDate: show.date
-        });
-        const { error: updateError, data: updateData } = await supabase
-          .from('shows')
-          .update({ date: show.date })
-          .eq('id', show.id);
-        if (updateError) {
-          console.error('Failed to update show:', updateError);
-          console.error('Update error details:', {
-            code: updateError.code,
-            message: updateError.message,
-            details: updateError.details,
-            hint: updateError.hint
-          });
-        } else {
-          console.log('Successfully updated show:', updateData);
+          console.log('Successfully inserted new show:', show.title);
         }
       }
+    }
+    
+    // Send notifications for new shows
+    if (newShows.length > 0) {
+      console.log(`Sending notifications for ${newShows.length} new shows`);
+      
+      // Send message to channel about new shows
+      for (const show of newShows) {
+        try {
+          const message = showFormatter.format(show);
+          message.text = `🔔 *New Show Added!*\n\n${message.text}`;
+          
+          await telegram.sendMessage(CHANNEL_ID, message);
+          
+          // Add delay between messages to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error('Failed to send notification for new show:', error);
+        }
+      }
+    } else {
+      console.log('No new shows found');
     }
   }
 }; 
