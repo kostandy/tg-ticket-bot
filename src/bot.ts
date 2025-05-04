@@ -1,7 +1,7 @@
-import type { TelegramMessage, TelegramCallbackQuery, Show } from './types.js';
+import type { TelegramMessage, TelegramCallbackQuery, Show, Env } from './types.js';
 import { TelegramService } from './services/telegram.js';
-import { SupabaseShowRepository } from './repositories/show.repository.js';
 import { scrapeShows } from './scraper.js';
+import { SupabaseShowRepository } from './repositories/show.repository.js';
 import { getSupabase } from './db.js';
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -143,7 +143,9 @@ const handleAdminScrape = async (msg: TelegramMessage) => {
     
     // Do the scraping
     const startTime = Date.now();
-    const shows = await scrapeShows();
+    // Get env from global context
+    const env = globalThis.env as Env;
+    const shows = await scrapeShows(env);
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     
     // Report results

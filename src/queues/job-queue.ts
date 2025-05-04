@@ -1,9 +1,7 @@
-import { createHash } from 'node:crypto';
 import * as cheerio from 'cheerio';
-import { getStoredShows, storeShows } from '../storage/file.js';
+import { createHash } from 'crypto';
 import type { Show } from '../types.js';
-import { getSupabase } from '../db.js';
-import { SCRAPER_CONFIG } from '../config.js';
+import { SCRAPER_CONFIG, logDebug } from '../config.js';
 import { fetchWithRetry, getSubrequestCount } from '../http/fetch-client.js';
 import { hasNoEvents, parseShowsFromHtml } from '../scrapers/html-parser.js';
 
@@ -60,136 +58,35 @@ export class JobQueue {
 
   private async processJob(job: Job): Promise<Show[]> {
     try {
+      // Check subrequest limit before processing
+      if (getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
+        console.error('Subrequest limit reached before processing job');
+        throw new Error('Subrequest limit reached');
+      }
+
       const response = await fetchWithRetry(job.url);
       const html = await response.text();
+      
+      // Use a lightweight check before loading the full cheerio parser
+      if (html.includes('Вибачте, наразі немає подій') || !html.includes('event-card')) {
+        logDebug(`No events found for ${job.day} (quick check)`);
+        return [];
+      }
+      
+      // Only load cheerio if we have potential shows
       const $ = cheerio.load(html);
       
       if (hasNoEvents($)) {
-        console.log(`No events found for ${job.day}`);
+        logDebug(`No events found for ${job.day}`);
         return [];
       }
       
       const dayShows = parseShowsFromHtml($, job.day);
-      console.log(`Found ${dayShows.length} shows for ${job.day}`);
+      logDebug(`Found ${dayShows.length} shows for ${job.day}`);
       
-      const existingFileName = await this.findExistingFile(job.day);
-      const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
-      const posterMap = new Map<string, Show>();
-      
-      // Store shows by their new hash-based ID
-      for (const show of storedShows) {
-        posterMap.set(show.id, show);
-      }
-      
-      // Add new shows from current scrape
-      for (const show of dayShows) {
-        posterMap.set(show.id, show);
-      }
-      
-      const mergedShows = Array.from(posterMap.values());
-      
-      if (SCRAPER_CONFIG.STORAGE_MODE) {
-        const contentHash = this.calculateHash(mergedShows).slice(0, 10);
-        const newFileName = `posters-${job.day}-${contentHash}`;
-        
-        if (!existingFileName || existingFileName.split('-').pop()?.split('.')[0] !== contentHash) {
-          if (existingFileName) {
-            await this.deleteFile(existingFileName);
-          }
-          await storeShows(newFileName, mergedShows);
-        } else {
-          console.log(`Content unchanged for ${job.day}, skipping storage`);
-        }
-      } else {
-        const supabase = getSupabase();
-        
-        // Fetch only IDs and content hashes to minimize payload
-        const { data: existingShows, error: selectError } = await supabase
-          .from('shows')
-          .select('id, contentHash')
-          .in('id', mergedShows.map(show => show.id));
-        
-        if (selectError) {
-          console.error('Failed to fetch existing shows:', selectError);
-          return mergedShows;
-        }
-        
-        // Create a map for fast lookup
-        const existingShowMap = new Map<string, { id: string; contentHash?: string }>();
-        existingShows?.forEach(show => existingShowMap.set(show.id, show));
-        
-        let newCount = 0;
-        let updatedCount = 0;
-        let unchangedCount = 0;
-        
-        // Batch operations to reduce subrequests and timeouts
-        const showsToInsert: Show[] = [];
-        const showsToUpdate: Show[] = [];
-        
-        // First, separate shows into insertion and update batches
-        for (const show of mergedShows) {
-          const existingShow = existingShowMap.get(show.id);
-          
-          if (!existingShow) {
-            // New show
-            showsToInsert.push(show);
-          } else if (existingShow.contentHash !== show.contentHash) {
-            // Show exists but content has changed
-            showsToUpdate.push(show);
-          } else {
-            // Show exists and hasn't changed - no update needed
-            unchangedCount++;
-          }
-        }
-        
-        // Process insertions in batch (up to 10 at a time)
-        for (let i = 0; i < showsToInsert.length; i += 10) {
-          const batch = showsToInsert.slice(i, i + 10);
-          if (batch.length > 0) {
-            try {
-              const { error } = await supabase.from('shows').insert(batch);
-              if (error) throw error;
-              newCount += batch.length;
-            } catch (error) {
-              console.error(`Error inserting batch of ${batch.length} shows:`, error);
-            }
-          }
-          
-          // Small delay between batches, but much less than before
-          if (i + 10 < showsToInsert.length) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-          }
-        }
-        
-        // Process updates individually (since we need to filter by ID)
-        for (const show of showsToUpdate) {
-          try {
-            const { error: updateError } = await supabase
-              .from('shows')
-              .update({ 
-                title: show.title,
-                url: show.url,
-                imageUrl: show.imageUrl,
-                ticketUrl: show.ticketUrl,
-                soldOut: show.soldOut,
-                contentHash: show.contentHash
-              })
-              .eq('id', show.id);
-            
-            if (updateError) throw updateError;
-            updatedCount++;
-            
-            // Very small delay between operations
-            await new Promise(resolve => setTimeout(resolve, 50));
-          } catch (error) {
-            console.error(`Error updating show ${show.id}:`, error);
-          }
-        }
-        
-        console.log(`Day ${job.day} processed: ${newCount} new, ${updatedCount} updated, ${unchangedCount} unchanged shows`);
-      }
-      
-      return mergedShows;
+      // With Cloudflare Worker constraints, we'll prioritize just returning the found shows
+      // and handle persistence separately to avoid exceeding CPU time limits
+      return dayShows;
     } catch (error: unknown) {
       if (error instanceof Error && 
          (error.message === 'Subrequest limit reached' || 
@@ -238,41 +135,42 @@ export class JobQueue {
 
   async waitForCompletion(): Promise<Show[]> {
     const MAX_WAIT_TIME = SCRAPER_CONFIG.MAX_WAIT_TIME;
-    const startTime = Date.now();
     const initialJobCount = this.queue.length + this.running;
-    let lastStatusLog = 0;
+    const startTime = Date.now();
     
-    while (this.running > 0 || this.queue.length > 0) {
-      // Check if we've been running too long
-      if (Date.now() - startTime > MAX_WAIT_TIME) {
-        const completedJobs = initialJobCount - (this.queue.length + this.running);
+    return new Promise((resolve) => {
+      // Short timeout for Cloudflare Worker CPU limits
+      const timeout = setTimeout(() => {
+        const completedJobs = this.completedJobs.length;
         const completionPercentage = Math.round((completedJobs / initialJobCount) * 100);
-        console.error(`JobQueue wait time exceeded (${completionPercentage}% completed, ${this.results.length} shows found). Returning partial results.`);
-        break;
-      }
+        
+        console.error(`CPU time limit reached (${completionPercentage}% completed, ${this.results.length} shows found). Returning partial results.`);
+        resolve(this.results);
+      }, MAX_WAIT_TIME);
       
-      // Log status periodically to help with debugging
-      const now = Date.now();
-      if (now - lastStatusLog > 2000) { // Log every 2 seconds
-        lastStatusLog = now;
-        const elapsed = ((now - startTime) / 1000).toFixed(1);
-        const completedJobs = initialJobCount - (this.queue.length + this.running);
-        console.log(`JobQueue status after ${elapsed}s: ${completedJobs}/${initialJobCount} jobs completed, ${this.results.length} shows found`);
-      }
+      // Check queue status frequently
+      const checkQueueStatus = () => {
+        // Check if we need to stop due to CPU time limit approaching
+        if (Date.now() - startTime >= MAX_WAIT_TIME - 2) { // Leave 2ms buffer
+          clearTimeout(timeout);
+          console.log(`CPU time limit approaching, stopping queue processing. Found ${this.results.length} shows.`);
+          resolve(this.results);
+          return;
+        }
+        
+        // Return completed results if the queue is empty and nothing is running
+        if (this.queue.length === 0 && this.running === 0) {
+          clearTimeout(timeout);
+          resolve(this.results);
+          return;
+        }
+        
+        // Check again quickly
+        setTimeout(checkQueueStatus, 1); // Check every 1ms
+      };
       
-      // Check for subrequest limit
-      if (getSubrequestCount() >= SCRAPER_CONFIG.MAX_SUBREQUESTS) {
-        console.error('Stopping job queue due to subrequest limit');
-        break;
-      }
-      
-      // Wait a shorter time to be more responsive to limits
-      await new Promise(resolve => setTimeout(resolve, 300)); // Reduced from 500ms to be more responsive
-    }
-    
-    // Return collected results even if incomplete
-    console.log(`JobQueue finished with ${this.results.length} shows from ${initialJobCount} jobs`);
-    return this.results;
+      checkQueueStatus();
+    });
   }
 
   getResults(): Show[] {

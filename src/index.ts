@@ -4,14 +4,12 @@ import { initSupabase, getSupabase } from './db.js';
 import type { Env, TelegramUpdate, Show } from './types.js';
 import { TelegramService } from './services/telegram.js';
 import { DefaultShowFormatter } from './services/show-formatter.js';
+import { logDebug } from './config.js';
 
-// Enable detailed logging only in development
-const IS_DEV = false; // Set to false in production
-const logDebug = (message: string, ...args: unknown[]) => {
-  if (IS_DEV) {
-    console.log(message, ...args);
-  }
-};
+// Make env available globally
+declare global {
+  var env: Env;
+}
 
 // Admin command prefix
 const ADMIN_COMMANDS = ['/admin_stats', '/admin_scrape', '/admin_clearold', '/admin_help', '/admin_broadcast'];
@@ -25,6 +23,10 @@ export default {
     if (secret !== env.TELEGRAM_BOT_SECRET) return new Response('Unauthorized', { status: 403 });
 
     try {
+      // Make env available globally
+      globalThis.env = env;
+      
+      // Initialize Supabase
       initSupabase(env);
 
       const url = new URL(request.url);
@@ -117,32 +119,30 @@ export default {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async scheduled(_: any, env: Env) {
     try {
+      // Make env available globally
+      globalThis.env = env;
+      
       logDebug('Starting scheduled job');
       initSupabase(env);
       
-      // Initialize Telegram service for notifications
-      if (!env.TELEGRAM_BOT_TOKEN) {
-        console.error('Missing Telegram bot token, will not send notifications');
+      // Scrape shows incrementally, passing env to access KV storage
+      const shows = await scrapeShows(env);
+      
+      // If we didn't get any shows, just exit early to save CPU time
+      if (!shows.length) {
+        logDebug('No shows retrieved in this execution, will try again next cron run');
+        return;
       }
       
-      // Get notification channel ID from environment
-      const notificationChannelId = env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID 
-        ? parseInt(env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, 10) 
-        : null;
+      logDebug(`Scraped ${shows.length} shows in this execution`);
       
-      if (!notificationChannelId) {
-        console.error('Missing or invalid TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, notifications will not be sent');
-      }
-      
-      const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramService(env.TELEGRAM_BOT_TOKEN) : null;
-      const showFormatter = new DefaultShowFormatter();
-
-      // First, fetch only IDs of existing shows to minimize payload
+      // Initialize Telegram service for notifications only if we have new shows
       const supabase = getSupabase();
+      
+      // First, fetch only IDs of existing shows to minimize payload
       const { data: existingShowIds, error: selectError } = await supabase
         .from('shows')
-        .select('id')
-        .order('datetime', { ascending: false });
+        .select('id');
       
       if (selectError) {
         console.error('Failed to fetch existing show IDs:', selectError);
@@ -153,96 +153,67 @@ export default {
       const existingIdMap = new Map<string, boolean>();
       existingShowIds?.forEach(item => existingIdMap.set(item.id, true));
       
-      logDebug(`Loaded ${existingIdMap.size} existing show IDs`);
-      
-      // Scrape shows, passing env to access KV storage for state persistence
+      // Identify new shows
       const newShows: Show[] = [];
-      const shows = await scrapeShows(env);
-      
-      logDebug(`Scraped ${shows.length} total shows`);
-      
-      // Batch database operations to stay within subrequest limits
-      const BATCH_SIZE = 10;
       const showsToInsert = [];
       
       for (const show of shows) {
         // Check if show already exists by ID
         if (!existingIdMap.has(show.id)) {
-          logDebug(`New show detected: "${show.title}" on ${show.datetime}`);
           newShows.push(show);
           showsToInsert.push(show);
         }
       }
       
-      // Insert shows in batches
-      for (let i = 0; i < showsToInsert.length; i += BATCH_SIZE) {
-        const batch = showsToInsert.slice(i, i + BATCH_SIZE);
-        if (batch.length === 0) continue;
+      // If we have new shows, insert them and send notifications
+      if (showsToInsert.length > 0) {
+        // Insert just one batch to stay within CPU time limits
+        // The rest will be inserted on subsequent executions
+        const BATCH_SIZE = 5; // Reduced batch size to stay within CPU limits
+        const batchToInsert = showsToInsert.slice(0, BATCH_SIZE);
         
         try {
-          const { error: insertError } = await supabase.from('shows').insert(batch);
+          const { error: insertError } = await supabase.from('shows').insert(batchToInsert);
           if (insertError) {
             console.error('Failed to insert shows batch:', insertError);
           } else {
-            logDebug(`Successfully inserted ${batch.length} shows`);
-          }
-          
-          // Avoid hitting rate limits
-          if (i + BATCH_SIZE < showsToInsert.length) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            logDebug(`Successfully inserted ${batchToInsert.length} shows`);
           }
         } catch (error) {
           console.error('Error inserting batch of shows:', error);
         }
-      }
-      
-      // Send notifications for new shows
-      if (newShows.length > 0 && telegram && notificationChannelId) {
-        logDebug(`Sending notifications for ${newShows.length} new shows to channel ${notificationChannelId}`);
         
-        try {
-          // Send message to channel about new shows, but limit to 5 to avoid excessive API calls
-          const maxNotifications = Math.min(newShows.length, 5);
-          for (let i = 0; i < maxNotifications; i++) {
+        // Send at most one notification to avoid excessive API calls
+        if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID) {
+          const notificationChannelId = parseInt(env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, 10);
+          if (!isNaN(notificationChannelId)) {
             try {
-              const show = newShows[i];
-              const message = showFormatter.format(show);
-              message.text = `🔔 *Нова вистава додана!*\n\n${message.text}`;
+              const telegram = new TelegramService(env.TELEGRAM_BOT_TOKEN);
+              const showFormatter = new DefaultShowFormatter();
               
-              await telegram.sendMessage(notificationChannelId, message);
-              logDebug(`Notification sent for show: "${show.title}"`);
-              
-              // Add delay between messages to avoid rate limits
-              if (i < maxNotifications - 1) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+              // Send a notification for the first new show only
+              if (newShows.length > 0) {
+                const show = newShows[0];
+                const message = showFormatter.format(show);
+                message.text = `🔔 *Нові вистави додані!*\n\n${message.text}`;
+                
+                await telegram.sendMessage(notificationChannelId, message);
+                
+                // If there are more shows, send a summary
+                if (newShows.length > 1) {
+                  await telegram.sendMessage(notificationChannelId, {
+                    text: `*Також додано ще ${newShows.length - 1} вистав(и). Використайте /posters щоб побачити всі.*`,
+                    parse_mode: 'Markdown'
+                  });
+                }
               }
             } catch (error) {
-              console.error('Failed to send notification for show:', error);
+              console.error('Failed to send notification:', error);
             }
           }
-          
-          // If there are more shows than our limit, send a summary message
-          if (newShows.length > maxNotifications) {
-            try {
-              await telegram.sendMessage(notificationChannelId, {
-                text: `*Також додано ще ${newShows.length - maxNotifications} вистав(и). Використайте /posters щоб побачити всі.*`,
-                parse_mode: 'Markdown'
-              });
-            } catch (error) {
-              console.error('Failed to send summary notification:', error);
-            }
-          }
-        } catch (error) {
-          console.error('Failed to process notifications:', error);
-        }
-      } else if (newShows.length > 0) {
-        if (!telegram) {
-          logDebug('Found new shows but no Telegram token available for notifications');
-        } else if (!notificationChannelId) {
-          logDebug('Found new shows but no notification channel ID specified');
         }
       } else {
-        logDebug('No new shows found');
+        logDebug('No new shows to insert in this execution');
       }
     } catch (error) {
       console.error('Error in scheduled job:', error);

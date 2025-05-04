@@ -15,13 +15,22 @@ export const scrapeDay = async (url: string, day: string): Promise<Show[]> => {
   try {
     const response = await fetchWithRetry(url);
     const html = await response.text();
-    const $ = cheerio.load(html);
     
-    if (hasNoEvents($)) {
-      console.log(`No events found for ${day}`);
+    // Use a lightweight check before loading the full cheerio parser to save CPU time
+    if (html.includes('Вибачте, наразі немає подій') || !html.includes('event-card')) {
+      logDebug(`No events found for ${day} (quick check)`);
       return [];
     }
     
+    // Only load cheerio if we have potential shows
+    const $ = cheerio.load(html);
+    
+    if (hasNoEvents($)) {
+      logDebug(`No events found for ${day}`);
+      return [];
+    }
+    
+    // Parse with minimal DOM manipulation to save CPU time
     return parseShowsFromHtml($, day);
   } catch (error) {
     console.error(`Error scraping day ${url}:`, error);
@@ -154,12 +163,12 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
     const processedDates = previousState?.processedDates || [];
 
     const timeoutPromise = new Promise<Show[]>((resolve) => {
-      // Give the scraper a reasonable time to complete within the worker's CPU time
+      // Use a very short timeout due to Cloudflare's 10ms CPU time limit
       setTimeout(() => {
         timeoutReached = true;
-        console.log('Scraper timeout reached, saving state and returning partial results');
+        console.log('CPU time limit approaching, saving state for next execution');
         
-        // Save state to KV if timeout reached
+        // Always save state on timeout to ensure incremental progress
         if (kvStorage) {
           // Get the remaining jobs from the queue
           const pendingJobs = jobQueue.getPendingJobs();
@@ -178,13 +187,14 @@ export const scrapeShows = async (env?: Env): Promise<Show[]> => {
             subrequestCount: getSubrequestCount()
           };
           
-          // Save state asynchronously (don't await to avoid blocking)
+          // Save state immediately but don't wait for it to complete
           kvStorage.saveScraperState(state)
-            .then(() => logDebug('Successfully saved interrupted state to KV'))
+            .then(() => logDebug('Successfully saved state before timeout'))
             .catch(err => console.error('Failed to save state on timeout:', err));
         }
         
-        resolve([]);
+        // Return whatever we have so far
+        resolve(previousState?.completedShows || []);
       }, SCRAPER_CONFIG.MAX_WAIT_TIME);
     });
 
