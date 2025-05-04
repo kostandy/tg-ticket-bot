@@ -19,13 +19,18 @@ export function initSupabase(env: { SUPABASE_URL: string; SUPABASE_KEY: string }
     global: {
       headers: { 'x-client-info': 'loop-tickets-bot' },
       fetch: (url, init) => {
-        const modifiedInit = {
+        const fetchInit = {
           ...init,
-          cache: 'no-store',
+          cache: 'no-store' as const,
           credentials: 'omit' as const
         };
-        delete modifiedInit.keepalive;
-        return fetch(url, modifiedInit);
+        
+        if (init && 'keepalive' in init) {
+          const extendedInit = init as Record<string, unknown>;
+          delete extendedInit.keepalive;
+        }
+        
+        return fetch(url, fetchInit);
       }
     },
     db: {

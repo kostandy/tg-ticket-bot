@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "lib": ["ES2024"],
     "moduleResolution": "NodeNext",
-    "types": ["node"],
+    "types": ["./worker-configuration.d.ts", "node"],
     "strict": true,
     "outDir": "dist",
     "esModuleInterop": true,

@@ -1,5 +1,3 @@
-/// <reference types="@cloudflare/workers-types" />
-
 export interface Show {
   id: string;
   title: string;
@@ -31,6 +29,13 @@ export interface Env {
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
   SCRAPER_KV: KVNamespace;
+}
+
+// Define KVNamespace interface locally
+interface KVNamespace {
+  get(key: string, options?: Record<string, unknown>): Promise<string | null>;
+  put(key: string, value: string | ArrayBuffer | ArrayBufferView | ReadableStream, options?: Record<string, unknown>): Promise<void>;
+  delete(key: string): Promise<void>;
 }
 
 export interface TelegramUser {

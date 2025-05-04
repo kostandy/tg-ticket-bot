@@ -6,7 +6,7 @@
     "dev": "wrangler dev --test-scheduled --remote",
     "deploy": "npm run build && wrangler deploy",
     "lint": "eslint . --ext .ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run types && tsc --noEmit",
     "types": "wrangler types",
     "build": "tsc --project tsconfig.json",
     "scrape": "STORAGE_MODE=file tsc && node --env-file=.dev.vars --experimental-specifier-resolution=node dist/scraper.js"
@@ -16,7 +16,6 @@
     "cheerio": "^1.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250504.0",
     "@eslint/js": "^9.26.0",
     "@types/node": "^22.15.3",
     "@typescript-eslint/eslint-plugin": "^8.31.1",

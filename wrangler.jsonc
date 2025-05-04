@@ -1,7 +1,7 @@
 {
   "name": "tg-ticket-bot",
   "main": "src/index.ts",
-  "compatibility_date": "2025-04-20",
+  "compatibility_date": "2025-05-04",
   "compatibility_flags": [
     "nodejs_compat"
   ],

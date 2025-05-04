@@ -13,11 +13,12 @@ export default [
       parser: tsParser,
       parserOptions: {
         project: './tsconfig.json',
-        ecmaVersion: 2022,
+        ecmaVersion: 2024,
         sourceType: 'module'
       },
       globals: {
         ...globals.node,
+        ...globals.worker
       },
     },
     plugins: {

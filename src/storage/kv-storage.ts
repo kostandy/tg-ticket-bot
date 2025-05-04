@@ -1,6 +1,6 @@
 import { logDebug } from '../config.js';
 import type { Job } from '../queues/job-queue.js';
-import type { Show } from '../types.js';
+import type { Show, Env } from '../types.js';
 
 // Define the structure of a saved scraping state
 export interface ScrapingState {
@@ -20,7 +20,7 @@ export class KVStorage {
   private readonly STATE_TTL = 86400;
 
   // Initialize with the KV namespace
-  constructor(private kv: KVNamespace) {}
+  constructor(private kv: Env['SCRAPER_KV']) {}
 
   // Save the current scraping state
   async saveScraperState(state: ScrapingState): Promise<void> {
