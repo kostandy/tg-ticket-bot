@@ -1,3 +1,5 @@
+/// <reference types="@cloudflare/workers-types" />
+
 export interface Show {
   id: string;
   title: string;
@@ -28,6 +30,7 @@ export interface Env {
   TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID: string;
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
+  SCRAPER_KV: KVNamespace;
 }
 
 export interface TelegramUser {

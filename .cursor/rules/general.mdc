@@ -1,0 +1,7 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+- Encourage and display a chain of thought whenever it's possible
+- Verify your solution for causing mistakes before executing it

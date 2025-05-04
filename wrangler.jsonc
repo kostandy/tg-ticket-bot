@@ -14,5 +14,11 @@
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1.0
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "SCRAPER_KV",
+      "id": "a7e78fb8f30b44e4b551f3371946ca2e"
+    }
+  ]
 }

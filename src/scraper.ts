@@ -1,11 +1,12 @@
 // This file provides backward compatibility with existing code
 // It re-exports the scraping functionality from the new modular structure
 
-import { scrapeShows as scrapeShowsImpl } from './scrapers/main-scraper.js';
-import type { Show } from './types.js';
+import { scrapeShows as mainScraper } from './scrapers/main-scraper.js';
+import type { Show, Env } from './types.js';
 
-export const scrapeShows = async (): Promise<Show[]> => {
-  return await scrapeShowsImpl();
+// Re-export the scrapeShows function with support for env parameter
+export const scrapeShows = async (env?: Env): Promise<Show[]> => {
+  return mainScraper(env);
 };
 
 // Direct execution support

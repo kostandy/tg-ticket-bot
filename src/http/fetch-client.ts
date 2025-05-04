@@ -99,6 +99,11 @@ export const fetchWithRetry = async (
 // Get current subrequest count
 export const getSubrequestCount = (): number => subrequestCount;
 
+// Set subrequest count - useful for resuming from a saved state
+export const setSubrequestCount = (count: number): void => {
+  subrequestCount = count;
+};
+
 // Reset subrequest count (mostly for testing purposes)
 export const resetSubrequestCount = (): void => {
   subrequestCount = 0;

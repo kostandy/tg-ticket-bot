@@ -16,6 +16,7 @@ export class JobQueue {
   private queue: Job[] = [];
   private running = 0;
   private results: Show[] = [];
+  private completedJobs: Job[] = [];
 
   constructor(private maxConcurrent: number) {}
 
@@ -39,6 +40,8 @@ export class JobQueue {
     try {
       const shows = await this.processJob(job);
       this.results.push(...shows);
+      // Track completed jobs
+      this.completedJobs.push(job);
     } catch (error: unknown) {
       console.error(`Error processing job for ${job.url}:`, error);
       
@@ -274,5 +277,16 @@ export class JobQueue {
 
   getResults(): Show[] {
     return this.results;
+  }
+  
+  // Get pending jobs for state persistence
+  getPendingJobs(): Job[] {
+    // Return a copy of the current queue
+    return [...this.queue];
+  }
+  
+  // Get completed jobs for tracking processed dates
+  getCompletedJobs(): Job[] {
+    return this.completedJobs;
   }
 } 

@@ -155,9 +155,9 @@ export default {
       
       logDebug(`Loaded ${existingIdMap.size} existing show IDs`);
       
-      // Scrape shows
+      // Scrape shows, passing env to access KV storage for state persistence
       const newShows: Show[] = [];
-      const shows = await scrapeShows();
+      const shows = await scrapeShows(env);
       
       logDebug(`Scraped ${shows.length} total shows`);
       

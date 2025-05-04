@@ -1,0 +1,37 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Cloudflare Worker AI Optimization Rule File
+
+## Purpose
+Optimize AI-related tasks executed via Cloudflare Workers for performance and cost-efficiency.
+
+## Global Worker Settings
+- runtime: edge
+- deployment: wrangler
+- wrangler_version: 3
+- compatibility_date: "2025-05-01"
+- node_compat: true
+- config_file: wrangler.jsonc
+
+## Caching Rules
+- Cache requests for at least 2 hours
+
+## Limitations
+
+Ensure any code you create takes these limitations into consideration and fits them. Optimize your solutions if needed to consume as less resources as possible and finish the task.
+
+- Request: 100,000 requests/day 1000 requests/min
+- Worker memory: 128 MB
+- CPU time: 10 ms
+- Cache API calls/request: 50
+- Subrequests: 50/request
+- Simultaneous outgoing connections/request: 6
+- Worker size: 3 MB
+- Worker startup time: 400 ms
+- Number of Cron Triggers per account: 5
+
+## Logging Minimization
+- Log only errors to reduce cost
