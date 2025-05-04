@@ -97,12 +97,14 @@ const handleAdminStats = async (msg: TelegramMessage) => {
     }
     
     // Get upcoming shows (future dates)
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    
     const { count: upcomingShows, error: upcomingError } = await supabase
       .from('shows')
       .select('*', { count: 'exact', head: true })
       .eq('soldOut', false)
-      .gt('date', today);
+      .gt('date', todayStr);
     
     if (upcomingError) {
       throw new Error(`Error getting upcoming show count: ${upcomingError.message}`);
@@ -160,13 +162,14 @@ const handleAdminClearOld = async (msg: TelegramMessage) => {
     const supabase = getSupabase();
     
     // Get today's date
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
     
     // Delete shows with dates in the past
     const { error, count } = await supabase
       .from('shows')
       .delete({ count: 'exact' })
-      .lt('date', today)
+      .lt('date', todayStr)
       .select();
     
     if (error) {
@@ -271,7 +274,13 @@ const sendShowsPage = async (chatId: number, page: number) => {
   const pageShows = shows.slice(startIdx, endIdx);
   
   const pageText = pageShows.map(show => {
-    const dateDisplay = show.soldOut ? `${show.date} (Sold Out)` : show.date;
+    const formattedDate = show.date instanceof Date 
+      ? show.date.toLocaleDateString('uk-UA')
+      : typeof show.date === 'string' 
+        ? show.date 
+        : new Date(show.date).toLocaleDateString('uk-UA');
+    
+    const dateDisplay = show.soldOut ? `${formattedDate} (Sold Out)` : formattedDate;
     return `*${show.title}*\nDate: ${dateDisplay}\n${show.soldOut ? '' : `🎫 [Купити квитки](https://molodyytheatre.com${show.ticketUrl})`}`;
   }).join('\n\n---\n\n');
   
@@ -304,7 +313,13 @@ const updateShowsPage = async (chatId: number, messageId: number, page: number) 
   const pageShows = shows.slice(startIdx, endIdx);
   
   const pageText = pageShows.map(show => {
-    const dateDisplay = show.soldOut ? `${show.date} (Sold Out)` : show.date;
+    const formattedDate = show.date instanceof Date 
+      ? show.date.toLocaleDateString('uk-UA')
+      : typeof show.date === 'string' 
+        ? show.date 
+        : new Date(show.date).toLocaleDateString('uk-UA');
+        
+    const dateDisplay = show.soldOut ? `${formattedDate} (Sold Out)` : formattedDate;
     return `*${show.title}*\nDate: ${dateDisplay}\n${show.soldOut ? '' : `🎫 [Купити квитки](https://molodyytheatre.com${show.ticketUrl})`}`;
   }).join('\n\n---\n\n');
   

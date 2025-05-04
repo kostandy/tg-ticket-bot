@@ -2,7 +2,7 @@ export interface Show {
   id: string;
   title: string;
   url: string;
-  date: string;
+  date: Date;
   imageUrl: string;
   ticketUrl: string;
   soldOut: boolean;

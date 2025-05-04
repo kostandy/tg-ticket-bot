@@ -8,7 +8,9 @@ export class SupabaseShowRepository implements ShowRepository {
       console.error('Failed to fetch shows:', error);
       throw new Error('Failed to fetch shows');
     }
-    return data || [];
+    
+    // Convert date strings to Date objects
+    return (data || []).map(this.processShowDates);
   }
 
   async findAvailable(): Promise<Show[]> {
@@ -22,11 +24,16 @@ export class SupabaseShowRepository implements ShowRepository {
       console.error('Failed to fetch available shows:', error);
       throw new Error('Failed to fetch available shows');
     }
-    return data || [];
+    
+    // Convert date strings to Date objects
+    return (data || []).map(this.processShowDates);
   }
 
   async save(show: Show): Promise<void> {
-    const { error } = await getSupabase().from('shows').insert(show);
+    // Convert Date to ISO string for database
+    const processedShow = this.prepareShowForDb(show);
+    
+    const { error } = await getSupabase().from('shows').insert(processedShow);
     if (error) {
       console.error('Failed to save show:', error);
       throw new Error('Failed to save show');
@@ -34,14 +41,37 @@ export class SupabaseShowRepository implements ShowRepository {
   }
 
   async update(show: Show): Promise<void> {
+    // Convert Date to ISO string for database
+    const processedShow = this.prepareShowForDb(show);
+    
     const { error } = await getSupabase()
       .from('shows')
-      .update(show)
+      .update(processedShow)
       .eq('id', show.id);
 
     if (error) {
       console.error('Failed to update show:', error);
       throw new Error('Failed to update show');
     }
+  }
+  
+  // Helper method to convert database date strings to Date objects
+  private processShowDates(show: Omit<Show, 'date'> & { date: string | Date }): Show {
+    return {
+      ...show,
+      date: show.date ? new Date(show.date) : new Date()
+    };
+  }
+  
+  // Helper method to prepare show for database storage
+  private prepareShowForDb(show: Show): Omit<Show, 'date'> & { date: string } {
+    // Create a copy of the show object
+    const { date, ...rest } = show;
+    
+    // Convert Date to ISO date string for database storage
+    return {
+      ...rest,
+      date: date instanceof Date ? date.toISOString().split('T')[0] : new Date(date).toISOString().split('T')[0]
+    };
   }
 } 

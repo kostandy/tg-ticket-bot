@@ -50,8 +50,9 @@ if (!STORAGE_MODE) {
 let subrequestCount = 0;
 
 // Create a hash ID from URL and date
-const createShowId = (url: string, date: string): string => {
-  return createHash('sha256').update(`${url}_${date}`).digest('hex').slice(0, 16);
+const createShowId = (url: string, date: Date | string): string => {
+  const dateStr = date instanceof Date ? date.toISOString().split('T')[0] : date;
+  return createHash('sha256').update(`${url}_${dateStr}`).digest('hex').slice(0, 16);
 };
 
 // Calculate a content hash for a show to detect changes
@@ -92,12 +93,14 @@ const parseShowsFromHtml = ($: cheerio.CheerioAPI, date: string): Show[] => {
     const soldOut = $el.find('.views-field-field-label .field-content').text().trim().toLowerCase() === 'квитки продано';
     
     if (title && url) {
-      const id = createShowId(url, date);
+      // Parse date string to Date object
+      const dateObj = new Date(date);
+      const id = createShowId(url, dateObj);
       const show: Show = {
         id,
         title,
         url,
-        date,
+        date: dateObj,
         imageUrl,
         ticketUrl,
         soldOut
