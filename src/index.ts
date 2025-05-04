@@ -1,4 +1,4 @@
-import { handleStart, handlePosters, handleUpcoming, handlePaginationCallback } from './bot.js';
+import { handleStart, handlePosters, handleUpcoming, handlePaginationCallback, handleAdmin } from './bot.js';
 import { scrapeShows } from './scraper.js';
 import { initSupabase, getSupabase } from './db.js';
 import type { Env, TelegramUpdate, Show } from './types.js';
@@ -15,6 +15,9 @@ const logDebug = (message: string, ...args: unknown[]) => {
     console.log(message, ...args);
   }
 };
+
+// Admin command prefix
+const ADMIN_COMMANDS = ['/admin_stats', '/admin_scrape', '/admin_clearold', '/admin_help'];
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -44,6 +47,13 @@ export default {
           return new Response('Invalid message', { status: 400 });
         }
 
+        // Check for admin commands
+        if (msg.text && ADMIN_COMMANDS.some(cmd => msg.text === cmd)) {
+          await handleAdmin(msg, msg.text);
+          return new Response('OK');
+        }
+
+        // Regular commands
         if (msg.text === '/start') {
           await handleStart(msg);
         } else if (msg.text === '/posters') {

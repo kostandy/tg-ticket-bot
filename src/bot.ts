@@ -1,6 +1,8 @@
 import type { TelegramMessage, TelegramCallbackQuery, Show } from './types.js';
 import { TelegramService } from './services/telegram.js';
 import { SupabaseShowRepository } from './repositories/show.repository.js';
+import { scrapeShows } from './scraper.js';
+import { getSupabase } from './db.js';
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error('Missing Telegram bot token');
@@ -17,9 +19,183 @@ const userPages = new Map<number, {
 
 const SHOWS_PER_PAGE = 3;
 
+// Admin user ID from environment
+let adminUserId: number | null = null;
+if (process.env.TELEGRAM_BOT_ADMIN_USER_ID) {
+  adminUserId = parseInt(process.env.TELEGRAM_BOT_ADMIN_USER_ID, 10);
+  if (isNaN(adminUserId)) {
+    console.error('Invalid TELEGRAM_BOT_ADMIN_USER_ID, admin features will be disabled');
+    adminUserId = null;
+  }
+}
+
+// Check if a user is an admin
+const isAdmin = (userId: number): boolean => {
+  return adminUserId !== null && userId === adminUserId;
+};
+
 export const handleStart = async (msg: TelegramMessage) => {
   await telegram.sendMessage(msg.chat.id, {
     text: 'Привіт! Я допоможу тобі слідкувати за квитками в Молодий театр.'
+  });
+};
+
+// Admin commands
+export const handleAdmin = async (msg: TelegramMessage, command: string) => {
+  if (!msg.from || !isAdmin(msg.from.id)) {
+    // Only send a response to the actual admin user (to avoid revealing the bot has admin features)
+    if (adminUserId !== null && msg.from && msg.from.id === adminUserId) {
+      await telegram.sendMessage(msg.chat.id, { 
+        text: 'Недостатньо прав для виконання цієї команди.' 
+      });
+    }
+    return;
+  }
+
+  switch (command) {
+    case '/admin_stats':
+      await handleAdminStats(msg);
+      break;
+    case '/admin_scrape':
+      await handleAdminScrape(msg);
+      break;
+    case '/admin_clearold':
+      await handleAdminClearOld(msg);
+      break;
+    case '/admin_help':
+      await handleAdminHelp(msg);
+      break;
+    default:
+      await telegram.sendMessage(msg.chat.id, { 
+        text: 'Невідома адмін команда. Використовуйте /admin_help для списку доступних команд.' 
+      });
+  }
+};
+
+// Show admin stats
+const handleAdminStats = async (msg: TelegramMessage) => {
+  try {
+    const supabase = getSupabase();
+    
+    // Get total shows count
+    const { count: totalShows, error: countError } = await supabase
+      .from('shows')
+      .select('*', { count: 'exact', head: true });
+    
+    if (countError) {
+      throw new Error(`Error getting show count: ${countError.message}`);
+    }
+    
+    // Get available shows count
+    const { count: availableShows, error: availableError } = await supabase
+      .from('shows')
+      .select('*', { count: 'exact', head: true })
+      .eq('soldOut', false);
+    
+    if (availableError) {
+      throw new Error(`Error getting available show count: ${availableError.message}`);
+    }
+    
+    // Get upcoming shows (future dates)
+    const today = new Date().toISOString().slice(0, 10);
+    const { count: upcomingShows, error: upcomingError } = await supabase
+      .from('shows')
+      .select('*', { count: 'exact', head: true })
+      .eq('soldOut', false)
+      .gt('date', today);
+    
+    if (upcomingError) {
+      throw new Error(`Error getting upcoming show count: ${upcomingError.message}`);
+    }
+    
+    // Format stats message
+    const statsMessage = '📊 *Статистика*\n\n' +
+      `Всього вистав: ${totalShows}\n` +
+      `Доступні вистави: ${availableShows}\n` +
+      `Майбутні вистави: ${upcomingShows}\n` +
+      `Активних сесій: ${userPages.size}\n\n` +
+      `Останнє оновлення: ${new Date().toLocaleString('uk-UA')}`;
+    
+    await telegram.sendMessage(msg.chat.id, {
+      text: statsMessage,
+      parse_mode: 'Markdown'
+    });
+  } catch (error) {
+    console.error('Error getting admin stats:', error);
+    await telegram.sendMessage(msg.chat.id, {
+      text: `Помилка при отриманні статистики: ${error instanceof Error ? error.message : 'Невідома помилка'}`
+    });
+  }
+};
+
+// Manually trigger scraping
+const handleAdminScrape = async (msg: TelegramMessage) => {
+  try {
+    // Send initial message
+    await telegram.sendMessage(msg.chat.id, {
+      text: '🔄 Запуск оновлення даних...'
+    });
+    
+    // Do the scraping
+    const startTime = Date.now();
+    const shows = await scrapeShows();
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    
+    // Report results
+    await telegram.sendMessage(msg.chat.id, {
+      text: `✅ Оновлення завершено за ${duration}с.\nЗнайдено ${shows.length} вистав.`,
+      parse_mode: 'Markdown'
+    });
+  } catch (error) {
+    console.error('Error during admin scrape:', error);
+    await telegram.sendMessage(msg.chat.id, {
+      text: `❌ Помилка під час оновлення: ${error instanceof Error ? error.message : 'Невідома помилка'}`
+    });
+  }
+};
+
+// Clear old shows
+const handleAdminClearOld = async (msg: TelegramMessage) => {
+  try {
+    const supabase = getSupabase();
+    
+    // Get today's date
+    const today = new Date().toISOString().slice(0, 10);
+    
+    // Delete shows with dates in the past
+    const { error, count } = await supabase
+      .from('shows')
+      .delete({ count: 'exact' })
+      .lt('date', today)
+      .select();
+    
+    if (error) {
+      throw new Error(`Error deleting old shows: ${error.message}`);
+    }
+    
+    await telegram.sendMessage(msg.chat.id, {
+      text: `✅ Видалено ${count} старих вистав.`,
+      parse_mode: 'Markdown'
+    });
+  } catch (error) {
+    console.error('Error clearing old shows:', error);
+    await telegram.sendMessage(msg.chat.id, {
+      text: `❌ Помилка при видаленні старих вистав: ${error instanceof Error ? error.message : 'Невідома помилка'}`
+    });
+  }
+};
+
+// Show admin help
+const handleAdminHelp = async (msg: TelegramMessage) => {
+  const helpText = '🔐 *Адмін команди*\n\n' +
+    '*/admin_stats* - Показати статистику\n' +
+    '*/admin_scrape* - Запустити оновлення даних\n' +
+    '*/admin_clearold* - Видалити старі вистави\n' +
+    '*/admin_help* - Показати цю довідку';
+  
+  await telegram.sendMessage(msg.chat.id, {
+    text: helpText,
+    parse_mode: 'Markdown'
   });
 };
 

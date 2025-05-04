@@ -24,6 +24,7 @@ export interface Database {
 export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_BOT_SECRET: string;
+  TELEGRAM_BOT_ADMIN_USER_ID: string;
   SUPABASE_URL: string;
   SUPABASE_KEY: string;
 }
