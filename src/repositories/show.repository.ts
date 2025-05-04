@@ -16,7 +16,7 @@ export class SupabaseShowRepository implements ShowRepository {
       .from('shows')
       .select()
       .eq('soldOut', false)
-      .order('dates', { ascending: true });
+      .order('date', { ascending: true });
 
     if (error) {
       console.error('Failed to fetch available shows:', error);

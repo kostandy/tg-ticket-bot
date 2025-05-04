@@ -2,11 +2,10 @@ export interface Show {
   id: string;
   title: string;
   url: string;
-  dates: string[];
+  date: string;
   imageUrl: string;
   ticketUrl: string;
   soldOut: boolean;
-  soldOutByDate: Record<string, boolean>;
 }
 
 export interface UserSubscription {
