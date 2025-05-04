@@ -5,9 +5,6 @@ import type { Env, TelegramUpdate, Show } from './types.js';
 import { TelegramService } from './services/telegram.js';
 import { DefaultShowFormatter } from './services/show-formatter.js';
 
-// Channel ID for notifications
-const CHANNEL_ID = 2642067703;
-
 // Enable detailed logging only in development
 const IS_DEV = false; // Set to false in production
 const logDebug = (message: string, ...args: unknown[]) => {
@@ -83,6 +80,15 @@ export default {
         console.error('Missing Telegram bot token, will not send notifications');
       }
       
+      // Get notification channel ID from environment
+      const notificationChannelId = env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID 
+        ? parseInt(env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, 10) 
+        : null;
+      
+      if (!notificationChannelId) {
+        console.error('Missing or invalid TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, notifications will not be sent');
+      }
+      
       const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramService(env.TELEGRAM_BOT_TOKEN) : null;
       const showFormatter = new DefaultShowFormatter();
 
@@ -146,8 +152,8 @@ export default {
       }
       
       // Send notifications for new shows
-      if (newShows.length > 0 && telegram) {
-        logDebug(`Sending notifications for ${newShows.length} new shows to channel ${CHANNEL_ID}`);
+      if (newShows.length > 0 && telegram && notificationChannelId) {
+        logDebug(`Sending notifications for ${newShows.length} new shows to channel ${notificationChannelId}`);
         
         try {
           // Send message to channel about new shows, but limit to 5 to avoid excessive API calls
@@ -158,7 +164,7 @@ export default {
               const message = showFormatter.format(show);
               message.text = `🔔 *Нова вистава додана!*\n\n${message.text}`;
               
-              await telegram.sendMessage(CHANNEL_ID, message);
+              await telegram.sendMessage(notificationChannelId, message);
               logDebug(`Notification sent for show: "${show.title}"`);
               
               // Add delay between messages to avoid rate limits
@@ -173,7 +179,7 @@ export default {
           // If there are more shows than our limit, send a summary message
           if (newShows.length > maxNotifications) {
             try {
-              await telegram.sendMessage(CHANNEL_ID, {
+              await telegram.sendMessage(notificationChannelId, {
                 text: `*Також додано ще ${newShows.length - maxNotifications} вистав(и). Використайте /posters щоб побачити всі.*`,
                 parse_mode: 'Markdown'
               });
@@ -185,7 +191,11 @@ export default {
           console.error('Failed to process notifications:', error);
         }
       } else if (newShows.length > 0) {
-        logDebug(`Found ${newShows.length} new shows but no Telegram token available for notifications`);
+        if (!telegram) {
+          logDebug('Found new shows but no Telegram token available for notifications');
+        } else if (!notificationChannelId) {
+          logDebug('Found new shows but no notification channel ID specified');
+        }
       } else {
         logDebug('No new shows found');
       }
