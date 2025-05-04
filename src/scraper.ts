@@ -41,33 +41,44 @@ if (!STORAGE_MODE) {
 // Keep track of subrequests to respect Cloudflare limits
 let subrequestCount = 0;
 
-const parseShowsFromHtml = ($: cheerio.CheerioAPI): Show[] => {
+// Create a hash ID from URL and date
+const createShowId = (url: string, date: string): string => {
+  return createHash('sha256').update(`${url}_${date}`).digest('hex').slice(0, 16);
+};
+
+// Helper function to strip query parameters from URLs
+const stripQueryParams = (url: string): string => {
+  try {
+    const urlObj = new URL(url);
+    return `${urlObj.origin}${urlObj.pathname}`;
+  } catch {
+    // If URL parsing fails, return the original URL
+    return url;
+  }
+};
+
+const parseShowsFromHtml = ($: cheerio.CheerioAPI, date: string): Show[] => {
   const shows: Show[] = [];
   
   $('.views-row').each((_, element) => {
     const $el = $(element);
     const title = $el.find('.views-field-field-event-title .field-content a').text().trim();
     const url = $el.find('.views-field-field-event-title .field-content a').attr('href') || '';
-    const dates = $el.find('.views-field-field-time .field-content').map((_, dateEl) => {
-      const day = $(dateEl).find('.t1').text().trim();
-      const month = $(dateEl).find('.t2').text().trim();
-      const time = $(dateEl).find('.t3').text().trim();
-      return [day, month, time].filter(Boolean).join(' ');
-    }).get();
-    const imageUrl = $el.find('.views-field-field-images img').attr('src') || '';
+    const rawImageUrl = $el.find('.views-field-field-images img').attr('src') || '';
+    const imageUrl = stripQueryParams(rawImageUrl);
     const ticketUrl = $el.find('.views-field-nothing a').attr('href') || '';
     const soldOut = $el.find('.views-field-field-label .field-content').text().trim().toLowerCase() === 'квитки продано';
     
     if (title && url) {
+      const id = createShowId(url, date);
       shows.push({
-        id: url,
+        id,
         title,
         url,
-        dates,
+        date,
         imageUrl,
         ticketUrl,
-        soldOut,
-        soldOutByDate: {}
+        soldOut
       });
     }
   });
@@ -140,12 +151,12 @@ const hasNoEvents = ($: cheerio.CheerioAPI): boolean => {
   return emptyMessage === 'На обрану дату немає заходів.';
 };
 
-const scrapeDay = async (url: string): Promise<Show[]> => {
+const scrapeDay = async (url: string, day: string): Promise<Show[]> => {
   console.log(`Scraping day from ${url}`);
   try {
     const response = await fetchWithRetry(url);
     const html = await response.text();
-    return parseShowsFromHtml(cheerio.load(html));
+    return parseShowsFromHtml(cheerio.load(html), day);
   } catch (error) {
     console.error(`Error scraping day ${url}:`, error);
     return [];
@@ -252,31 +263,21 @@ class JobQueue {
         return [];
       }
       
-      const dayShows = await scrapeDay(job.url);
+      const dayShows = await scrapeDay(job.url, job.day);
       const existingFileName = await this.findExistingFile(job.day);
       const storedShows = existingFileName ? await getStoredShows(existingFileName) : [];
       const posterMap = new Map<string, Show>();
       
+      // Store shows by their new hash-based ID
       for (const show of storedShows) {
-        posterMap.set(show.id, { ...show, soldOutByDate: show.soldOutByDate || {} });
+        // Ensure existing stored shows also have query params stripped
+        show.imageUrl = stripQueryParams(show.imageUrl);
+        posterMap.set(show.id, show);
       }
       
+      // Add new shows from current scrape
       for (const show of dayShows) {
-        if (!posterMap.has(show.id)) {
-          posterMap.set(show.id, {
-            ...show,
-            dates: [job.day],
-            soldOutByDate: { [job.day]: !!show.soldOut }
-          } as Show);
-        } else {
-          const poster = posterMap.get(show.id);
-          if (poster) {
-            if (!poster.dates.includes(job.day)) {
-              poster.dates.push(job.day);
-            }
-            poster.soldOutByDate[job.day] = !!show.soldOut;
-          }
-        }
+        posterMap.set(show.id, show);
       }
       
       const mergedShows = Array.from(posterMap.values());
@@ -310,11 +311,15 @@ class JobQueue {
               if (insertError) throw insertError;
               console.log('Inserted show:', show.title);
             } else {
-              const mergedDates = Array.from(new Set([...(existingShow.dates || []), ...(show.dates || [])]));
-              const mergedSoldOutByDate = { ...(existingShow.soldOutByDate || {}), ...(show.soldOutByDate || {}) };
               const { error: updateError } = await supabase
                 .from('shows')
-                .update({ dates: mergedDates, soldOutByDate: mergedSoldOutByDate })
+                .update({ 
+                  title: show.title,
+                  url: show.url,
+                  imageUrl: show.imageUrl,
+                  ticketUrl: show.ticketUrl,
+                  soldOut: show.soldOut
+                })
                 .eq('id', show.id);
               if (updateError) throw updateError;
               console.log('Updated show:', show.title);
