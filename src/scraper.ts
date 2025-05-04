@@ -25,13 +25,13 @@ const logDebug = (message: string, ...args: unknown[]) => {
 
 const STORAGE_MODE = process.env.STORAGE_MODE === 'file';
 const MAX_RETRIES = 3;
-const RATE_LIMIT_DELAY = 1000; // Reduced delay to save CPU time
-const MAX_CONCURRENT_JOBS = 1;
+const RATE_LIMIT_DELAY = 800; // Slightly reduced delay to save CPU time
+const MAX_CONCURRENT_JOBS = 2; // Limited to 2 concurrent jobs to stay within Cloudflare's connection limits
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const BASE_URL = 'https://molodyytheatre.com';
 // Cloudflare Worker limits
-const MAX_SUBREQUESTS = 40; // Keep well below the 50 limit to be safe
-const CHUNK_SIZE = 5; // Reduced to save memory and CPU time
+const MAX_SUBREQUESTS = 35; // Keep further below the 50 limit to be safer
+const CHUNK_SIZE = 4; // Reduced to improve completion chances
 
 logDebug('STORAGE_MODE', STORAGE_MODE);
 
@@ -421,37 +421,67 @@ class JobQueue {
         let updatedCount = 0;
         let unchangedCount = 0;
         
+        // Batch operations to reduce subrequests and timeouts
+        const showsToInsert: Show[] = [];
+        const showsToUpdate: Show[] = [];
+        
+        // First, separate shows into insertion and update batches
         for (const show of mergedShows) {
           const existingShow = existingShowMap.get(show.id);
           
-          try {
-            if (!existingShow) {
-              // This is a new show
-              const { error: insertError } = await supabase.from('shows').insert(show);
-              if (insertError) throw insertError;
-              newCount++;
-            } else if (existingShow.contentHash !== show.contentHash) {
-              // Show exists but content has changed
-              const { error: updateError } = await supabase
-                .from('shows')
-                .update({ 
-                  title: show.title,
-                  url: show.url,
-                  imageUrl: show.imageUrl,
-                  ticketUrl: show.ticketUrl,
-                  soldOut: show.soldOut,
-                  contentHash: show.contentHash
-                })
-                .eq('id', show.id);
-              if (updateError) throw updateError;
-              updatedCount++;
-            } else {
-              // Show exists and hasn't changed - no update needed
-              unchangedCount++;
+          if (!existingShow) {
+            // New show
+            showsToInsert.push(show);
+          } else if (existingShow.contentHash !== show.contentHash) {
+            // Show exists but content has changed
+            showsToUpdate.push(show);
+          } else {
+            // Show exists and hasn't changed - no update needed
+            unchangedCount++;
+          }
+        }
+        
+        // Process insertions in batch (up to 10 at a time)
+        for (let i = 0; i < showsToInsert.length; i += 10) {
+          const batch = showsToInsert.slice(i, i + 10);
+          if (batch.length > 0) {
+            try {
+              const { error } = await supabase.from('shows').insert(batch);
+              if (error) throw error;
+              newCount += batch.length;
+            } catch (error) {
+              console.error(`Error inserting batch of ${batch.length} shows:`, error);
             }
-            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+          
+          // Small delay between batches, but much less than before
+          if (i + 10 < showsToInsert.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        
+        // Process updates individually (since we need to filter by ID)
+        for (const show of showsToUpdate) {
+          try {
+            const { error: updateError } = await supabase
+              .from('shows')
+              .update({ 
+                title: show.title,
+                url: show.url,
+                imageUrl: show.imageUrl,
+                ticketUrl: show.ticketUrl,
+                soldOut: show.soldOut,
+                contentHash: show.contentHash
+              })
+              .eq('id', show.id);
+            
+            if (updateError) throw updateError;
+            updatedCount++;
+            
+            // Very small delay between operations
+            await new Promise(resolve => setTimeout(resolve, 50));
           } catch (error) {
-            console.error(`Error saving show ${show.id}:`, error);
+            console.error(`Error updating show ${show.id}:`, error);
           }
         }
         
@@ -508,14 +538,27 @@ class JobQueue {
   }
 
   async waitForCompletion(): Promise<Show[]> {
-    const MAX_WAIT_TIME = 7000; // 7 seconds max wait time
+    const MAX_WAIT_TIME = 9000; // Increased to 9 seconds to give more processing time
     const startTime = Date.now();
+    const initialJobCount = this.queue.length + this.running;
+    let lastStatusLog = 0;
     
     while (this.running > 0 || this.queue.length > 0) {
       // Check if we've been running too long
       if (Date.now() - startTime > MAX_WAIT_TIME) {
-        console.error('JobQueue wait time exceeded, returning partial results');
+        const completedJobs = initialJobCount - (this.queue.length + this.running);
+        const completionPercentage = Math.round((completedJobs / initialJobCount) * 100);
+        console.error(`JobQueue wait time exceeded (${completionPercentage}% completed, ${this.results.length} shows found). Returning partial results.`);
         break;
+      }
+      
+      // Log status periodically to help with debugging
+      const now = Date.now();
+      if (now - lastStatusLog > 2000) { // Log every 2 seconds
+        lastStatusLog = now;
+        const elapsed = ((now - startTime) / 1000).toFixed(1);
+        const completedJobs = initialJobCount - (this.queue.length + this.running);
+        console.log(`JobQueue status after ${elapsed}s: ${completedJobs}/${initialJobCount} jobs completed, ${this.results.length} shows found`);
       }
       
       // Check for subrequest limit
@@ -525,9 +568,11 @@ class JobQueue {
       }
       
       // Wait a shorter time to be more responsive to limits
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 300)); // Reduced from 500ms to be more responsive
     }
     
+    // Return collected results even if incomplete
+    console.log(`JobQueue finished with ${this.results.length} shows from ${initialJobCount} jobs`);
     return this.results;
   }
 }
@@ -555,8 +600,23 @@ export const scrapeShows = async (): Promise<Show[]> => {
     // Phase 3: Process shows using job queue with timeouts
     const jobQueue = new JobQueue(MAX_CONCURRENT_JOBS);
     
-    for (const day of datesToScrape) {
-      // Check if we've hit the subrequest limit
+    // Add priority to closer dates (process today and tomorrow first)
+    const priorityDays = datesToScrape.slice(0, 2); // Today and tomorrow
+    const regularDays = datesToScrape.slice(2);
+    
+    // Add priority days first
+    for (const day of priorityDays) {
+      if (subrequestCount >= MAX_SUBREQUESTS) {
+        console.error('Stopping adding priority jobs due to subrequest limit');
+        break;
+      }
+      
+      const currentUrl = `${BASE_URL}/afisha/${day}`;
+      jobQueue.add({ url: currentUrl, day });
+    }
+    
+    // Then add regular days
+    for (const day of regularDays) {
       if (subrequestCount >= MAX_SUBREQUESTS) {
         console.error('Stopping adding jobs due to subrequest limit');
         break;
@@ -572,7 +632,7 @@ export const scrapeShows = async (): Promise<Show[]> => {
       setTimeout(() => {
         console.error('Scraper timeout reached, returning partial results');
         resolve([]);
-      }, 8000); // 8 seconds timeout (close to the 10ms CPU limit)
+      }, 9000); // Increased to 9 seconds to match the MAX_WAIT_TIME
     });
 
     // Race the job completion against the timeout
