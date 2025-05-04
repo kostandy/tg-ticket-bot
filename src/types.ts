@@ -74,6 +74,17 @@ export interface TelegramUpdate {
   edited_message?: TelegramMessage;
   channel_post?: TelegramMessage;
   edited_channel_post?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
+}
+
+export interface TelegramCallbackQuery {
+  id: string;
+  from: TelegramUser;
+  message?: TelegramMessage;
+  inline_message_id?: string;
+  chat_instance: string;
+  data?: string;
+  game_short_name?: string;
 }
 
 export interface InlineKeyboardButton {

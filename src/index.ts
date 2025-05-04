@@ -1,4 +1,4 @@
-import { handleStart, handlePosters, handleUpcoming } from './bot.js';
+import { handleStart, handlePosters, handleUpcoming, handlePaginationCallback } from './bot.js';
 import { scrapeShows } from './scraper.js';
 import { initSupabase, getSupabase } from './db.js';
 import type { Env, TelegramUpdate } from './types.js';
@@ -17,6 +17,13 @@ export default {
 
     if (url.pathname === '/webhook') {
       const update = await request.json() as TelegramUpdate;
+      
+      // Handle callback queries for pagination
+      if (update.callback_query) {
+        await handlePaginationCallback(update.callback_query);
+        return new Response('OK');
+      }
+      
       const msg = update.message;
 
       if (!msg) {
