@@ -62,6 +62,9 @@ export const handleAdmin = async (msg: TelegramMessage, command: string) => {
     case '/admin_clearold':
       await handleAdminClearOld(msg);
       break;
+    case '/admin_broadcast':
+      await handleAdminBroadcast(msg);
+      break;
     case '/admin_help':
       await handleAdminHelp(msg);
       break;
@@ -194,12 +197,59 @@ const handleAdminHelp = async (msg: TelegramMessage) => {
     '*/admin_stats* - Показати статистику\n' +
     '*/admin_scrape* - Запустити оновлення даних\n' +
     '*/admin_clearold* - Видалити старі вистави\n' +
+    '*/admin_broadcast* - Відправити повідомлення в канал сповіщень\n' +
     '*/admin_help* - Показати цю довідку';
   
   await telegram.sendMessage(msg.chat.id, {
     text: helpText,
     parse_mode: 'Markdown'
   });
+};
+
+// Handle broadcasting a message to the notification channel
+const handleAdminBroadcast = async (msg: TelegramMessage) => {
+  try {
+    // Check for notification channel ID
+    if (!process.env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID) {
+      await telegram.sendMessage(msg.chat.id, { 
+        text: '❌ Помилка: TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID не налаштовано.' 
+      });
+      return;
+    }
+
+    const notificationChannelId = parseInt(process.env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, 10);
+    if (isNaN(notificationChannelId)) {
+      await telegram.sendMessage(msg.chat.id, { 
+        text: '❌ Помилка: Недійсний ID каналу сповіщень.' 
+      });
+      return;
+    }
+
+    // Send initial message with instructions
+    await telegram.sendMessage(msg.chat.id, { 
+      text: 'Введіть повідомлення для трансляції в канал сповіщень у форматі:\n\n/broadcast Ваше повідомлення тут',
+      parse_mode: 'Markdown'
+    });
+
+    // Set up a one-time listener for this user's next message
+    const userId = msg.from?.id;
+    if (!userId) return;
+
+    // We would want to set up a proper message listener here, but for now we'll
+    // use a simple approach. In a full implementation, we would store this state
+    // and have a message handler that checks for pending broadcast requests.
+    // 
+    // For now, we'll instruct the admin on how to broadcast using a workaround
+
+    await telegram.sendMessage(msg.chat.id, {
+      text: 'Для відправки повідомлення використовуйте команду:\n\n/broadcast Текст повідомлення'
+    });
+  } catch (error) {
+    console.error('Error in broadcast setup:', error);
+    await telegram.sendMessage(msg.chat.id, {
+      text: `❌ Помилка: ${error instanceof Error ? error.message : 'Невідома помилка'}`
+    });
+  }
 };
 
 export const handlePosters = async (msg: TelegramMessage) => {

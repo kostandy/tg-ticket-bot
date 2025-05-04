@@ -14,7 +14,7 @@ const logDebug = (message: string, ...args: unknown[]) => {
 };
 
 // Admin command prefix
-const ADMIN_COMMANDS = ['/admin_stats', '/admin_scrape', '/admin_clearold', '/admin_help'];
+const ADMIN_COMMANDS = ['/admin_stats', '/admin_scrape', '/admin_clearold', '/admin_help', '/admin_broadcast'];
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -47,6 +47,51 @@ export default {
         // Check for admin commands
         if (msg.text && ADMIN_COMMANDS.some(cmd => msg.text === cmd)) {
           await handleAdmin(msg, msg.text);
+          return new Response('OK');
+        }
+        
+        // Check for broadcast command
+        if (msg.text && msg.text.startsWith('/broadcast ') && msg.from) {
+          const isAdminUser = env.TELEGRAM_BOT_ADMIN_USER_ID && 
+                             parseInt(env.TELEGRAM_BOT_ADMIN_USER_ID, 10) === msg.from.id;
+                             
+          if (isAdminUser) {
+            const broadcastText = msg.text.substring('/broadcast '.length).trim();
+            const notificationChannelId = env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID 
+              ? parseInt(env.TELEGRAM_BOT_NOTIFICATION_CHANNEL_ID, 10) 
+              : null;
+              
+            if (notificationChannelId && broadcastText) {
+              try {
+                const telegramService = new TelegramService(env.TELEGRAM_BOT_TOKEN);
+                await telegramService.sendMessage(notificationChannelId, {
+                  text: `📢 *Оголошення*\n\n${broadcastText}`,
+                  parse_mode: 'Markdown'
+                });
+                
+                await telegramService.sendMessage(msg.chat.id, {
+                  text: '✅ Повідомлення успішно відправлено в канал.'
+                });
+              } catch (error) {
+                console.error('Error sending broadcast:', error);
+                const telegram = new TelegramService(env.TELEGRAM_BOT_TOKEN);
+                await telegram.sendMessage(msg.chat.id, {
+                  text: `❌ Помилка при відправці повідомлення: ${error instanceof Error ? error.message : 'Невідома помилка'}`
+                });
+              }
+            } else {
+              const telegram = new TelegramService(env.TELEGRAM_BOT_TOKEN);
+              if (!notificationChannelId) {
+                await telegram.sendMessage(msg.chat.id, {
+                  text: '❌ Помилка: ID каналу сповіщень не налаштовано.'
+                });
+              } else if (!broadcastText) {
+                await telegram.sendMessage(msg.chat.id, {
+                  text: '❌ Помилка: Текст повідомлення не може бути порожнім.'
+                });
+              }
+            }
+          }
           return new Response('OK');
         }
 
